@@ -1,5 +1,9 @@
 # Testpack — Fixed Test Modpack for CI
 
+![Production](https://img.shields.io/badge/production-NO-red) ![Status](https://img.shields.io/badge/usage-CI%20only-blue)
+
+> **Not for production.** This modpack is for automated CI testing only — not a public server distribution.
+
 This directory contains a pinned, version-locked modpack used for automated integration
 testing of the Crelia compatibility modules against real mod JARs in CI pipelines.
 

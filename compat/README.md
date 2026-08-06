@@ -1,5 +1,9 @@
 # Crelia Compat — Compatibility Modules
 
+![Production](https://img.shields.io/badge/production-NO-red) ![Status](https://img.shields.io/badge/status-experimental-orange)
+
+> **Not for production.** Crelia and its compat modules are experimental pre-release software. Do not run on live servers.
+
 This directory contains the compatibility layer modules for the Crelia (Folia-based)
 NeoForge server project. Each module patches a specific mod to operate correctly on
 Folia's regionized threading model.

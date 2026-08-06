@@ -1,5 +1,9 @@
 # Server patches WIP
 
+![Production](https://img.shields.io/badge/продакшен-НЕТ-red) ![Status](https://img.shields.io/badge/статус-WIP-yellow)
+
+> **Не для продакшена.** Патчи в этой папке — черновики; они не входят в стабильную сборку.
+
 These NeoForge hook batches (`0033`–`0040`) were authored against incomplete compile shims and do **not** apply cleanly on the Folia `dev/1.21.1` + NeoForge **21.1.248** tree.
 
 Active NeoForge hooks that *do* apply and compile are `patches/server/0020`–`0025` (updated for 21.1.248 API signatures).
