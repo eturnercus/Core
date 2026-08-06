@@ -15,7 +15,32 @@
 </div>
 
 > [!CAUTION]
-> **Не для продакшена.** Экспериментальная сборка: загрузка NeoForge-модов через ModLauncher ещё не завершена, многие моды несовместимы с региональным многопоточностью Folia. Делайте бэкапы миров перед запуском.
+> **Не для продакшена.** FML/ModLauncher pipeline **работает** — моды из `mods/` сканируются и инициализируются. Но Create/Sable и region-compat (`crelia-compat-*`) на этом билде ещё не прогонялись; многие моды могут быть несовместимы с региональным многопоточностью Folia. Делайте бэкапы миров.
+
+## FML pipeline (smoke)
+
+Проблема была не в Create/Sable, а в том, что ядро **не доводило NeoForge registries до конца** после запуска через ModLauncher.
+
+**Что проходит на текущем билде** ([PR #2](https://github.com/eturnercus/Core/pull/2), `fd12694`):
+
+| Этап | Статус |
+|------|--------|
+| `NeoForge ServerModLoader.load()` completed | ✅ |
+| `handleServerAboutToStart` (без `neoforge:biome_modifier` / Folia-first incomplete) | ✅ |
+| Folia доходит до `Done` и держится | ✅ |
+| Мод из `mods/` сканируется и попадает в Mod List (проверено на Cloth Config) | ✅ |
+
+**Патч `0027`** — доводка registries после ModLauncher:
+
+- `ArgumentTypeInfos.registerByClass`, Ingredient list codecs
+- `SpawnPlacements`, `CreativeModeTab`, `BlockEntityType.getValidBlocks`
+- datapack sync (`grabNetworkableRegistries` / `getDataPackRegistries`)
+- biome/structure modifier accessors
+- `ChunkGenerator.refreshFeaturesPerStep`
+- capability cleanup на `ServerLevel`
+
+> [!NOTE]
+> **Следующий шаг:** совместимость Create/Sable modpack и `crelia-compat-create` / `crelia-compat-sable` под regionized threading.
 
 ## Плашки статуса
 
@@ -83,8 +108,11 @@ java -jar build/libs/crelia-1.21.1-neoforge-21.1.248.jar
 
 При первом запуске примите `eula.txt`. NeoForge-моды — в `mods/`. Плагины должны иметь `folia-supported: true`.
 
+> [!TIP]
+> Smoke: в логе должны быть `ServerModLoader.load() completed`, затем `Done (...)! For help, type "help"`. Моды из `mods/` появляются в Mod List.
+
 > [!WARNING]
-> FML mod scan через ModLauncher пока не полностью владеет запуском — моды в `mods/` могут не загрузиться. Хуки NeoForge lifecycle могут писать WARN — сервер при этом может дойти до `Done`.
+> Не все моды совместимы с Folia region threading. Тех-модпаки (Create, Sable) требуют отдельной проверки и compat-модулей.
 
 ## Релизы
 
@@ -96,7 +124,7 @@ java -jar build/libs/crelia-1.21.1-neoforge-21.1.248.jar
 2. **Shims** в `build-data/crelia-neoforge-shims` позволяют скомпилировать пропатченные исходники Minecraft против заглушек NeoForge API.
 3. **NeoForge universal** `21.1.248` встраивается в runtime (не дерево NeoForge для MC 26 из старых форков Crelia).
 4. **Coremods** используют NeoForge 21.1 SPI `ICoreMod` (не API FML 7 `ClassProcessorProvider`).
-5. **Crelia launcher** поставляет fat-jar: Folia server + FML + NeoForge + Crelia runtime.
+5. **Crelia launcher** запускает Folia через **ModLauncher/BootstrapLauncher** (`creliaserver`), подаёт Folia AT + NeoForge через `CreliaGameLocator`, вызывает `ServerModLoader` до Folia Main.
 
 ## Upstream
 
@@ -111,7 +139,7 @@ java -jar build/libs/crelia-1.21.1-neoforge-21.1.248.jar
 
 ## Статус патчей
 
-Активные серверные патчи: Folia `0001`–`0019` + NeoForge hooks `0020`–`0025` (API выровнен под NeoForge **21.1.248**).
+Активные серверные патчи: Folia `0001`–`0019` + NeoForge hooks `0020`–`0027` (ModLauncher runtime + `ServerModLoader` completion, API под NeoForge **21.1.248**).
 
 Дополнительные батчи NeoForge hooks `0033`–`0040` лежат в `patches/server-wip/` — написаны под неполные shims и пока не применяются чисто. Будут перебазированы на 21.1.248 позже.
 
@@ -133,7 +161,32 @@ java -jar build/libs/crelia-1.21.1-neoforge-21.1.248.jar
 </div>
 
 > [!CAUTION]
-> **Not for production.** Experimental build: NeoForge mod loading via ModLauncher is incomplete; many mods are incompatible with Folia regionized threading. Back up worlds before running.
+> **Not for production.** The FML/ModLauncher pipeline **works** — mods in `mods/` are scanned and initialized. Create/Sable and region-compat (`crelia-compat-*`) have not been validated on this build yet; many mods may still break on Folia region threading. Back up worlds.
+
+### FML pipeline (smoke)
+
+The blocker was not Create/Sable — the kernel **did not finish NeoForge registries** after ModLauncher startup.
+
+**Current build passes** ([PR #2](https://github.com/eturnercus/Core/pull/2), `fd12694`):
+
+| Stage | Status |
+|-------|--------|
+| `NeoForge ServerModLoader.load()` completed | ✅ |
+| `handleServerAboutToStart` (no `neoforge:biome_modifier` / Folia-first incomplete) | ✅ |
+| Folia reaches `Done` and stays up | ✅ |
+| Mod from `mods/` scanned and listed (verified with Cloth Config) | ✅ |
+
+**Patch `0027`** completes registries after ModLauncher:
+
+- `ArgumentTypeInfos.registerByClass`, Ingredient list codecs
+- `SpawnPlacements`, `CreativeModeTab`, `BlockEntityType.getValidBlocks`
+- datapack sync (`grabNetworkableRegistries` / `getDataPackRegistries`)
+- biome/structure modifier accessors
+- `ChunkGenerator.refreshFeaturesPerStep`
+- capability cleanup on `ServerLevel`
+
+> [!NOTE]
+> **Next:** Create/Sable modpack compatibility and `crelia-compat-create` / `crelia-compat-sable` under regionized threading.
 
 ### Status badges
 
@@ -183,8 +236,11 @@ java -jar build/libs/crelia-1.21.1-neoforge-21.1.248.jar
 
 Accept `eula.txt` on first run. NeoForge mods go in `mods/`. Plugins need `folia-supported: true`.
 
+> [!TIP]
+> Smoke: expect `ServerModLoader.load() completed`, then `Done (...)! For help, type "help"`. Mods from `mods/` appear in Mod List.
+
 > [!WARNING]
-> FML mod scan via ModLauncher does not fully own startup yet — mods in `mods/` may not load. NeoForge lifecycle hooks may log WARNs while the server still reaches `Done`.
+> Not all mods are compatible with Folia region threading. Tech modpacks (Create, Sable) need separate validation and compat modules.
 
 ### Releases
 
@@ -196,7 +252,7 @@ Pre-built jars are on [GitHub Releases](https://github.com/eturnercus/Core/relea
 2. **Shims** under `build-data/crelia-neoforge-shims` let patched Minecraft sources compile against NeoForge API stubs.
 3. **Published NeoForge universal** `21.1.248` is embedded at runtime.
 4. **Coremods** use NeoForge 21.1 `ICoreMod` SPI.
-5. **Crelia launcher** ships a fat jar with Folia server + FML + NeoForge + Crelia runtime.
+5. **Crelia launcher** boots Folia via **ModLauncher/BootstrapLauncher** (`creliaserver`), feeds Folia AT + NeoForge through `CreliaGameLocator`, runs `ServerModLoader` before Folia Main.
 
 ### Upstream
 
@@ -211,7 +267,7 @@ Different trees use different licenses. Folia/Paper patches: [`PATCHES-LICENSE`]
 
 ### Patch status
 
-Active server patches: Folia `0001`–`0019` + NeoForge hooks `0020`–`0025` (API-aligned to NeoForge **21.1.248**).
+Active server patches: Folia `0001`–`0019` + NeoForge hooks `0020`–`0027` (ModLauncher runtime + `ServerModLoader` completion, API-aligned to NeoForge **21.1.248**).
 
 Additional NeoForge hook batches `0033`–`0040` are under `patches/server-wip/` and do not apply cleanly yet.
 
