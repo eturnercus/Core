@@ -31,7 +31,7 @@
 |---|---|
 | **Артефакт** | `eturlia-1.21.1-neoforge-21.1.248.jar` |
 | **Launch target** | `eturliaserver` |
-| **Точка входа** | `eturlia.EturliaServer` |
+| **Точка входа** | `eturlia.EturliaServer` → `org.bukkit.craftbukkit.Main` (через `EturliaServerLaunchHandler`) |
 | **Релиз** | [v0.2.5](https://github.com/eturnercus/Core/releases/tag/v0.2.5) |
 
 ## Как это работает
@@ -68,7 +68,9 @@ java -jar eturlia-1.21.1-neoforge-21.1.248.jar
 ### Сборка (dev)
 
 1. **paperweight** накатывает `patches/api` и `patches/server` (апстрим Folia + слой Eturlia/NeoForge) на Paper.
-2. **Шимы** (`build-data/eturlia-neoforge-shims`) дают stub-сигнатуры NeoForge, чтобы NMS/Folia компилировались без полного дерева NeoForge в compile classpath.
+2. **Шимы** (`build-data/eturlia-neoforge-shims`) — справочные stub-сигнатуры NeoForge.
+   Сборка их **не использует**: Folia-Server компилируется против опубликованного
+   NeoForge universal (`compileOnly` в `build.gradle.kts`).
 3. В runtime в jar вложен опубликованный **NeoForge universal 21.1.248** — тот же major, что у целевых модов.
 4. Опциональные модули `eturlia-compat-create` / `eturlia-compat-sable` закрывают узкие region-bridges; они не заменяют пробелы в самом ядре.
 
@@ -111,10 +113,13 @@ java -jar eturlia-1.21.1-neoforge-21.1.248.jar
 ## Запуск
 
 ```bash
-java -jar build/libs/eturlia-1.21.1-neoforge-21.1.248.jar --nogui
+java -Xmx8G -jar build/libs/eturlia-1.21.1-neoforge-21.1.248.jar --nogui
 # или jar с GitHub Releases (v0.2.5+)
 ```
 
+- Jar — обёртка: она распаковывает библиотеки и запускает **дочернюю JVM** с сервером.
+  Флаги JVM обёртки (`-Xmx`, `-XX:*`, `-Deturlia.*`) пробрасываются в дочерний процесс,
+  а SIGTERM/Ctrl+C обёртки останавливает и сервер.
 - Первый запуск: примите `eula.txt`.
 - Моды NeoForge → `mods/`.
 - Плагины Bukkit/Paper → только с `folia-supported: true`.
@@ -155,7 +160,67 @@ Eturlia закрывает Folia↔NeoForge gaps **патчами ядра**. Н
 ### Crash-reports
 
 - Vanilla/Paper → `crash-reports/`
-- **Eturlia (с region id)** → отдельная папка `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
+- Eturlia-отчёты с region id → `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`).
+  Пишет `eturlia.EturliaServer`, который launch handler ставит перед передачей управления
+  в `org.bukkit.craftbukkit.Main`.
+
+### Конфиг ядра — `config/eturlia.yml`
+
+Всё, что специфично для Eturlia, настраивается здесь. Файл создаётся при первом запуске.
+Настройки Paper/Spigot/Bukkit **не дублируются** — для них свои файлы (ссылки в секции
+`reference:`).
+
+| Секция | Что настраивает |
+|--------|-----------------|
+| `threads` | потоки region-тика Folia и размер сетки регионов, chunk worker / IO, пул чата |
+| `jvm` | флаги **дочерней JVM**: `-Xmx`/`-Xms`, `Paper.WorkerThreadCount`, `Paper.IOThreadCount`, произвольные аргументы |
+| `chunks` | view/simulation distance, лимиты отправки и генерации чанков, автосейв |
+| `region` | режим region guard и валидации событий (`STRICT`/`WARN`/`PERMISSIVE`) |
+| `validation` | проверка region-потоков в coremod-хуках, строгий режим |
+| `logging` | файл диагностики ядра, печатать ли преды в консоль |
+| `crash` | каталог region-отчётов, ставить ли обработчик |
+| `hygiene` | что делать с несовместимыми jar'ами в `mods/` (`skip`/`warn`/`off`) |
+| `mods` | минимальная версия Lithostitched, строгая блокировка модов из манифеста |
+| `lod`, `spark`, `watchdog`, `console` | LOD-мост, spark, watchdog, цвет консоли |
+
+Количество потоков задаётся в двух местах, потому что применяется на разных этапах:
+`threads.region-tick-threads` и `region-grid-exponent` уходят в Folia
+(`GlobalConfiguration.threadedRegions`), а `jvm.worker-threads` / `jvm.io-threads` —
+на командную строку дочерней JVM, потому что Moonrise читает их до загрузки конфига.
+
+### Консоль и логи
+
+При старте ядро печатает баннер ETURLIA и несколько строк статуса. Предупреждения и ошибки
+Eturlia остаются в консоли, но **строго одной строкой**:
+
+```text
+[Eturlia] WARN config/eturlia.yml has _version=2 but this build expects 3
+[Eturlia] ERROR mod compatibility check failed — IllegalStateException: c2me is excluded
+```
+
+Полный текст со стектрейсами уходит в **`logs/eturlia.log`**. Логи самого сервера (Log4j2)
+не трогаются.
+
+| Флаг | Что делает |
+|------|------------|
+| `-Deturlia.console.errors=off` | вообще не печатать предупреждения Eturlia в консоль (в файл всё равно пишутся) |
+| `-Deturlia.console.color=off` | без ANSI-цвета (также уважается `NO_COLOR`) |
+| `-Deturlia.log.file=<path>` | другое расположение файла диагностики |
+
+### Известные ограничения
+
+- `mods/`-гигиена **переименовывает** конфликтные jar'ы (`spark-*neoforge*`, оригинальный
+  `arclight_sable_patch`) в `*.jar.eturlia-skipped` при каждом старте. Отключается:
+  `-Deturlia.mods.hygiene=warn` (только сообщать) или `=off` (не сканировать).
+
+- `ServerTickEvent.Pre/Post` (и `LevelTickEvent`) фактически шлются **из каждого
+  region-потока**, а не один раз за глобальный тик. Моды с однопоточными допущениями
+  в обработчиках тика получат конкурентные вызовы.
+- Модули `compat/eturlia-compat-create` и `compat/eturlia-compat-sable` — **скелеты**:
+  все хендлеры пустые, миксинов нет, зависимости не запинены. Они не собираются
+  root-проектом и не проверяются CI.
+- Region guard / thread validator ловят вызовы, но их ещё не подключили ко всем
+  NMS точкам входа — покрытие частичное.
 
 ### Semver
 
@@ -215,7 +280,7 @@ The goal is Folia’s multi-core scaling without giving up the NeoForge ecosyste
 |---|---|
 | **Artifact** | `eturlia-1.21.1-neoforge-21.1.248.jar` |
 | **Launch target** | `eturliaserver` |
-| **Entry point** | `eturlia.EturliaServer` |
+| **Entry point** | `eturlia.EturliaServer` → `org.bukkit.craftbukkit.Main` (via `EturliaServerLaunchHandler`) |
 | **Release** | [v0.2.5](https://github.com/eturnercus/Core/releases/tag/v0.2.5) |
 
 ## How it works
@@ -252,7 +317,7 @@ java -jar eturlia-1.21.1-neoforge-21.1.248.jar
 ### Build (dev)
 
 1. **paperweight** applies `patches/api` and `patches/server` (upstream Folia + the Eturlia/NeoForge layer) onto Paper.
-2. **Shims** (`build-data/eturlia-neoforge-shims`) provide stub NeoForge signatures so Folia/NMS can compile without the full NeoForge tree on the compile classpath.
+2. **Shims** (`build-data/eturlia-neoforge-shims`) are reference stubs only. The build does **not** use them: Folia-Server compiles against the published NeoForge universal jar (`compileOnly` in `build.gradle.kts`).
 3. Runtime embeds published **NeoForge universal 21.1.248** — the same major line as target mods.
 4. Optional `eturlia-compat-create` / `eturlia-compat-sable` modules cover narrow region bridges; they do not replace gaps in the core itself.
 
@@ -295,10 +360,13 @@ Output: `build/libs/eturlia-1.21.1-neoforge-21.1.248.jar`
 ## Run
 
 ```bash
-java -jar build/libs/eturlia-1.21.1-neoforge-21.1.248.jar --nogui
+java -Xmx8G -jar build/libs/eturlia-1.21.1-neoforge-21.1.248.jar --nogui
 # or the jar from GitHub Releases (v0.2.5+)
 ```
 
+The jar is a wrapper: it unpacks the libraries and starts a **child JVM** that runs the
+server. The wrapper's JVM options (`-Xmx`, `-XX:*`, `-Deturlia.*`) are forwarded to that
+child, and terminating the wrapper (SIGTERM / Ctrl+C) shuts the server down with it.
 Accept `eula.txt` on first boot. NeoForge mods go in `mods/`. Plugins need `folia-supported: true`.  
 Console defaults to **calm** (no green INFO). Override with `-Deturlia.console.color=full|off`.  
 Plugins that declare `libraries:` in `plugin.yml` may fail Maven resolve under ModLauncher; plugins without `libraries:` load fine.
@@ -337,7 +405,67 @@ Modder policy: [`docs/MODDER_POLICY.md`](./docs/MODDER_POLICY.md).
 ### Crash reports
 
 - Vanilla/Paper → `crash-reports/`
-- **Eturlia (with region id)** → separate folder `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
+- Region-annotated Eturlia reports → `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`),
+  written by `eturlia.EturliaServer`, which the launch handler installs before handing
+  control to `org.bukkit.craftbukkit.Main`.
+
+### Core config — `config/eturlia.yml`
+
+Everything Eturlia-specific is configured here; the file is created on first boot. Paper /
+Spigot / Bukkit settings are **not duplicated** — see the `reference:` section for where those
+live.
+
+| Section | What it controls |
+|---------|------------------|
+| `threads` | Folia region tick threads and grid exponent, chunk worker / IO threads, chat pool |
+| `jvm` | flags for the **child JVM**: `-Xmx`/`-Xms`, `Paper.WorkerThreadCount`, `Paper.IOThreadCount`, arbitrary extra args |
+| `chunks` | view/simulation distance, chunk send and generation limits, autosave |
+| `region` | region guard and event validation mode (`STRICT`/`WARN`/`PERMISSIVE`) |
+| `validation` | region-thread checking in the coremod hooks, strict mode |
+| `logging` | core diagnostics file, whether warnings also print to the console |
+| `crash` | region-annotated report directory, whether to install the handler |
+| `hygiene` | what to do with incompatible jars in `mods/` (`skip`/`warn`/`off`) |
+| `mods` | minimum Lithostitched version, strict enforcement of the compatibility manifest |
+| `lod`, `spark`, `watchdog`, `console` | LOD bridge, spark, watchdog, console colour |
+
+Thread counts live in two places because they apply at different times:
+`threads.region-tick-threads` and `region-grid-exponent` are pushed into Folia's
+`GlobalConfiguration.threadedRegions`, while `jvm.worker-threads` / `jvm.io-threads` go on the
+child JVM's command line — Moonrise reads those before any config is parsed.
+
+### Console and logs
+
+On startup the core prints the ETURLIA banner and a few status lines. Eturlia warnings and
+errors stay on the console but are **strictly one line each**:
+
+```text
+[Eturlia] WARN config/eturlia.yml has _version=2 but this build expects 3
+[Eturlia] ERROR mod compatibility check failed — IllegalStateException: c2me is excluded
+```
+
+The full record, stack trace included, goes to **`logs/eturlia.log`**. The server's own Log4j2
+logging is untouched.
+
+| Flag | Effect |
+|------|--------|
+| `-Deturlia.console.errors=off` | keep Eturlia warnings off the console entirely (still logged to the file) |
+| `-Deturlia.console.color=off` | no ANSI colour (`NO_COLOR` is honoured too) |
+| `-Deturlia.log.file=<path>` | move the diagnostics file |
+
+### Known limitations
+
+- The `mods/` hygiene pass **renames** conflicting jars (`spark-*neoforge*`, the original
+  `arclight_sable_patch`) to `*.jar.eturlia-skipped` on every boot. Opt out with
+  `-Deturlia.mods.hygiene=warn` (report only) or `=off` (do not scan).
+
+- `ServerTickEvent.Pre/Post` (and `LevelTickEvent`) are fired **per region tick**, not once
+  per global tick, so listeners are invoked concurrently from every region thread. Mods with
+  single-threaded assumptions in tick handlers will misbehave.
+- `compat/eturlia-compat-create` and `compat/eturlia-compat-sable` are **skeletons**: every
+  handler is a stub, no mixins are applied, dependencies are not pinned. They are not built
+  by the root project and not covered by CI.
+- The region guard / thread validator catch violations but are not yet wired into every NMS
+  entry point — coverage is partial.
 
 ### Semver
 

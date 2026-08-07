@@ -147,7 +147,7 @@ index 13f8c2cb42334ba3b573ca44ace1d3df76e41ff7..49a1c2756b4d115f226cdba013bfd6fb
                      return false;
                  }
 -                this.player = (event.getTarget() == null) ? null : ((CraftLivingEntity) event.getTarget()).getHandle();
-+                this.player = (event.getTarget() == null) ? null : (Player) ((CraftLivingEntity) event.getTarget()).getHandle();
++                this.player = (event.getTarget() == null) ? null : (((CraftLivingEntity) event.getTarget()).getHandle() instanceof Player eturliaTempter ? eturliaTempter : null); // Eturlia: EntityTargetLivingEntityEvent allows any LivingEntity; a hard (Player) cast threw ClassCastException on the region thread
              }
              // CraftBukkit end
              return this.player != null;

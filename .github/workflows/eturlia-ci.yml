@@ -2,19 +2,28 @@ name: eturlia-ci
 
 on:
   push:
-    branches: [main, "cursor/**"]
+    branches: [main, "cursor/**", "fix/**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repository and uploads artifacts.
+permissions:
+  contents: read
+
+# A new push to the same branch supersedes the previous (long) build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  apply-and-jar:
+  # Fast feedback: these checks need nothing but a JDK, so a broken parser or a
+  # malformed patch fails in seconds instead of after the ~40 minute patch+jar build.
+  selftest:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -22,7 +31,47 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # paperweight ApplyGitPatches commits into Folia-Server/API worktrees
+      # Invoked through bash so a missing executable bit cannot fail the job with
+      # "Permission denied" (exit 126) — checkouts from Windows have dropped it before.
+      - name: Eturlia core self-test
+        run: bash scripts/selftest.sh
+
+      # git am rejects a hunk whose header counts disagree with its body, and also one
+      # that contains no +/- lines at all ("corrupt patch"). Catching that here costs
+      # seconds; catching it in applyPatches costs the whole decompile.
+      - name: Validate patch structure
+        run: python3 scripts/check-patches.py
+
+  apply-and-jar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Decompiling Minecraft takes ~30 minutes and only changes when the upstream
+      # refs do, so key the cache on the properties that pin them.
+      - name: Cache paperweight upstreams
+        uses: actions/cache@v4
+        with:
+          path: |
+            .gradle/caches/paperweight
+            ~/.gradle/caches/paperweight
+          key: paperweight-${{ runner.os }}-${{ hashFiles('gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: |
+            paperweight-${{ runner.os }}-
+
+      # paperweight ApplyGitPatches commits into the Folia-Server/API worktrees
       - name: Configure git identity for paperweight
         run: |
           git config --global user.email "eturlia-ci@users.noreply.github.com"
@@ -31,44 +80,92 @@ jobs:
       - name: Apply patches
         run: ./gradlew applyPatches --stacktrace
 
-      - name: Build Folia-Server + Eturlia standalone jar
+      # The jar is the deliverable: Folia + NeoForge FML nested inside a single
+      # launcher jar. This step is what "the workflow builds the core" means.
+      - name: Build Eturlia standalone jar
         run: ./gradlew :folia-server:eturliaStandaloneJar --stacktrace
 
-      - name: Upload artifact
+      - name: Verify jar contents
+        run: |
+          set -euo pipefail
+          JAR=$(ls build/libs/eturlia-*.jar)
+          echo "Built: $JAR ($(du -h "$JAR" | cut -f1))"
+          # A jar that is missing any of these boots into a confusing failure much later.
+          for entry in \
+              "eturlia/launcher/Main.class" \
+              "META-INF/eturlia-libraries.index" \
+              "META-INF/eturlia-supported.json"; do
+            unzip -l "$JAR" "$entry" > /dev/null || { echo "MISSING: $entry"; exit 1; }
+            echo "ok: $entry"
+          done
+          unzip -p "$JAR" META-INF/MANIFEST.MF | grep -q "Main-Class: eturlia.launcher.Main"
+          echo "ok: Main-Class"
+          sha256sum "$JAR"
+
+      - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
           name: eturlia-jar
           path: build/libs/eturlia-*.jar
           if-no-files-found: error
 
+      - name: Upload patch-apply rejects on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-rejects
+          path: |
+            Folia-Server/.git/rebase-apply/
+            Folia-API/.git/rebase-apply/
+          if-no-files-found: ignore
+
   headless-smoke-empty:
     needs: apply-and-jar
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
+
       - name: Download jar
         uses: actions/download-artifact@v4
         with:
           name: eturlia-jar
           path: dist
+
       - name: Headless empty smoke
         run: |
           set -euo pipefail
           JAR=$(ls dist/eturlia-*.jar | head -1)
           mkdir -p smoke && cd smoke
           echo "eula=true" > eula.txt
-          timeout 180 java -Xmx2G -jar "../$JAR" --nogui || true
-          # Accept either clean Done or timeout after boot progressed
-          if grep -E "Done \\(|ServerModLoader completed" logs/latest.log; then
+          # The launcher spawns the real server as a child JVM. `timeout` signals only the
+          # launcher, whose shutdown hook stops the child; anything still alive afterwards
+          # is killed explicitly so the runner cannot hang on an orphan.
+          timeout --signal=TERM --kill-after=30s 300 java -Xmx2G -jar "../$JAR" --nogui || true
+          pkill -9 -f 'eturlia-libraries' 2>/dev/null || true
+          if [ ! -f logs/latest.log ]; then
+            echo "No logs/latest.log — the server never got far enough to open a log"
+            exit 1
+          fi
+          if grep -E "Done \(|ServerModLoader completed" logs/latest.log; then
             echo "SMOKE_OK"
           else
             echo "=== latest.log (tail) ==="
-            tail -n 80 logs/latest.log || true
+            tail -n 120 logs/latest.log
             exit 1
           fi
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: |
+            smoke/logs/
+            smoke/crash-reports/
+            smoke/eturlia-crash-reports/
+          if-no-files-found: ignore
