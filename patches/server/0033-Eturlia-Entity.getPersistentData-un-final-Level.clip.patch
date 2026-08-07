@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Cursor Agent <cursoragent@cursor.com>
+From: Eturlia <eturlia@eturnercus.dev>
 Date: Thu, 6 Aug 2026 16:19:50 +0000
 Subject: [PATCH] Eturlia: Entity.getPersistentData + un-final Level.clip for
  Create

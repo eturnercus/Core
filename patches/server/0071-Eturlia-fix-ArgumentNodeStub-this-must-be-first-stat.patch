@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Cursor Agent <cursoragent@cursor.com>
+From: Eturlia <eturlia@eturnercus.dev>
 Date: Thu, 6 Aug 2026 22:20:05 +0000
 Subject: [PATCH] Eturlia: fix ArgumentNodeStub this() must be first statement
 
