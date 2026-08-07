@@ -1,6 +1,6 @@
 # Eturlia pack audit — ASIC list (2026-08-06)
 
-**Ядро:** Eturlia v0.2.0 · MC 1.21.1 · NeoForge 21.1.248 · Folia  
+**Ядро:** Eturlia v0.2.4 · MC 1.21.1 · NeoForge 21.1.248 · Folia  
 **Конфиг ядра:** `config/eturlia.yml` (потоки, чанки, command blocks, region guard — с пояснениями)  
 **Область:** проверка заявленного списка jars (без «оптимизаторов» как требования «обязаны работать»).  
 **Важно:** «OK / скорее OK» = ожидаем **boot / load**, не гарантию region-safe геймплея навсегда. Folia режет мир на регионы — моды с глобальным тиком/AI часто деградируют под нагрузкой.
@@ -118,7 +118,7 @@ Smoke на Eturlia: `Done` + structure gen с `lithostitched-1.7.13` + Terralith
 | `easy_npc*` + `easy_npc_config_ui` + `easy_npc_bundle` | **RISK** — NPC / pathfinding / UI |
 | `coroutil-…` | **RISK** — weather/AI util |
 | `twilightforest-…` | **RISK** — dimension/структуры/боссы |
-| `BetterEnd-…` + `bclib-…` + `worldweaver-…` + `wunderlib-…` | **RISK** — тяжёлый worldgen BCLib |
+| `BetterEnd-…` + `bclib-…` + `worldweaver-…` + `wunderlib-…` | **BLOCK** — Fabric stack, не NeoForge |
 | `malum-…` + `lodestone-…` | **RISK** — сложная магия/эффекты |
 | `dungeons+` / `dungeons-and-taverns` / YUNG\* | **OK\*** datapack-heavy; следить за генерацией |
 | `YungsApi` + BetterDungeons + BetterNetherFortresses | **OK\*** |
@@ -126,7 +126,7 @@ Smoke на Eturlia: `Done` + structure gen с `lithostitched-1.7.13` + Terralith
 | `curios-…` | **OK\*** / **RISK** с слотами на регионах |
 | `horseman-…` / `weaponmaster_…` / `starcatcher-…` | **RISK** — combat/entity |
 | `immersive_melodies-…` / `toomanypaintings-…` | **OK\*** |
-| `quality_food-…` | **OK\*** (файл `.jar1` — починить имя) |
+| `quality_food-…` | **OK** boot (0086); имя файла должно быть `.jar` |
 | `letmedespawn-…` | **RISK** — despawn логика vs регионы |
 | `ibo-…` | **RISK** — уточнять назначение; часто инвазивный |
 | `tf_dnv` / `tfsaplingdimlock` | **RISK** — Twilight/dim locks |
@@ -150,7 +150,8 @@ Smoke на Eturlia: `Done` + structure gen с `lithostitched-1.7.13` + Terralith
 | `CreativeCore_…` | **OK\*** |
 | `moonlight-…` | **OK** (Eturlia bridges A) |
 | `FarmersDelight-…` | **OK** |
-| `amendments-…` / `supplementaries-…` / `beautify-…` | **OK\*** (Moonlight-экосистема) |
+| `supplementaries-…` / `beautify-…` | **OK** / **OK\*** (Moonlight; Supplementaries smoke PASS на v0.2.3+) |
+| `amendments-…` | **OK\*** — не пере-сертифицирован вместе с Supplementaries на 0086 |
 | `Almanac-…` / `anvianslib-…` | **OK\*** |
 | `attributefix-…` | **OK\*** |
 | `badpackets-…` | **OK** (часто для voice/emote) |
@@ -166,11 +167,11 @@ Smoke на Eturlia: `Done` + structure gen с `lithostitched-1.7.13` + Terralith
 
 ## Сводка по «должны работать»
 
-**Да (после чистки списка):** libs (Architectury, Cloth, Kotlin, Bookshelf, Resourceful\*, Moonlight), Farmers Delight, Supplementaries/Amendments/Beautify стек, Let's Do\*, Voice Chat, Emotecraft, WorldEdit 7.3.8, базовые утилиты (AttributeFix, Almanac, …), **Lithostitched ≥1.7.13 + Terralith + Incendium**.
+**Да (после чистки списка):** libs (Architectury, Cloth, Kotlin, Bookshelf, Resourceful\*, Moonlight), Farmers Delight, Supplementaries (+ Moonlight), quality_food, Let's Do\*, Voice Chat, Emotecraft, WorldEdit 7.3.8, базовые утилиты (AttributeFix, Almanac, …), **Lithostitched ≥1.7.13 + Terralith + Incendium**.
 
-**Нет / пока нет:** spark-neoforge, оригинальный Arclight sable patch, клиентские jars, битые `.jar1`/`.bak`.
+**Нет / пока нет:** spark-neoforge, оригинальный Arclight sable patch, клиентские jars, битые `.jar1`/`.bak`, Fabric BetterEnd/BCLib, пустой `easy_npc_bundle`.
 
-**At own risk / OK\* boot:** Create + Aeronautics, **Sable** (+ Eturlia shim; boot OK\*, region physics RISK), Alex's Mobs/Citadel, EasyNPC, Twilight Forest, BetterEnd/BCLib, Malum, тяжёлый dungeon-pack, curios-heavy, combat-моды.
+**At own risk / OK\* boot:** Create + Aeronautics, **Sable** (+ Eturlia shim; boot OK\*, region physics RISK), Alex's Mobs/Citadel, EasyNPC, Twilight Forest, Malum, тяжёлый dungeon-pack, curios-heavy, combat-моды, amendments.
 
 Оптимизаторы (`ferritecore`, `packetfixer`, `manas_queue`, …) — **вне** требования «должны работать».
 
@@ -215,6 +216,6 @@ Eturlia = Folia API + ModLauncher. Плагины из `plugins/`:
 - corpse (один), letsdo-\* (без дублей), worldedit-mod-7.3.8.jar  
 - опционально: curios, quality_food (починить имя), YUNG\* + dungeons datapacks  
 
-Убрать всё из таблиц **BLOCK / CLIENT / JUNK / spark-neoforge / Lithostitched-стек / Arclight**.
+Убрать всё из таблиц **BLOCK / CLIENT / JUNK / spark-neoforge / Lithostitched-beta / Arclight original**.
 
-Create / Alex / EasyNPC / TF / BetterEnd / Malum — только если готовы к **RISK** и бэкапам.
+Create / Alex / EasyNPC / TF / Malum — только если готовы к **RISK** и бэкапам. BetterEnd/BCLib — **не класть** (Fabric).

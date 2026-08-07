@@ -32,7 +32,7 @@
 | **Артефакт** | `eturlia-1.21.1-neoforge-21.1.248.jar` |
 | **Launch target** | `eturliaserver` |
 | **Точка входа** | `eturlia.EturliaServer` |
-| **Релиз** | [v0.2.3](https://github.com/eturnercus/Core/releases/tag/v0.2.3) |
+| **Релиз** | [v0.2.4](https://github.com/eturnercus/Core/releases/tag/v0.2.4) |
 
 ## Как это работает
 
@@ -121,57 +121,97 @@ java -jar build/libs/eturlia-1.21.1-neoforge-21.1.248.jar --nogui
 - Консоль по умолчанию **calm** (INFO без зелёного). `-Deturlia.console.color=full|off` при необходимости.
 - Плагины с `libraries:` в `plugin.yml` могут не резолвить Maven под ModLauncher; без `libraries:` — ок.
 
-## Совместимость (актуально для v0.2.3)
+## Совместимость (актуально для v0.2.4)
 
-Boot = FML OK + `Done (...)!` + миры. Это **не** гарантия region-safe геймплея на Folia.
+**Boot** = FML OK + `Done (...)!` + миры поднялись. Это **не** гарантия region-safe геймплея: Folia тикает чанки по регионам на разных потоках.
 
-### Ядро и плагины
+Полный аудит ASIC-списка: [`docs/PACK_COMPAT_ASIC_2026-08.md`](./docs/PACK_COMPAT_ASIC_2026-08.md) · smoke: [`docs/SMOKE_ASIC_2026-08-07.md`](./docs/SMOKE_ASIC_2026-08-07.md).
 
-| Что | Статус |
-|-----|--------|
-| Folia API + `folia-supported: true` | Плагины грузятся |
-| `libraries:` в `plugin.yml` | Часто ломается под ModLauncher — shade вручную |
-| Bundled spark | OK (`/spark`); **не** класть `spark-neoforge` |
-| Paper-плагины без Folia-метки | Не загрузятся |
-| FAWE / LuckPerms Folia-сборки | Обычно OK при `folia-supported` |
+### Что «есть» в ядре (встроено)
 
-### Моды — boot PASS (smoke на v0.2.3)
+| Компонент | Роль |
+|-----------|------|
+| Folia / Paper API | Регионы, плагины Bukkit, команды, миры |
+| NeoForge 21.1.248 + FancyModLoader | Каталог `mods/`, RegisterEvent, mixins модов |
+| **Bundled spark** | Профилирование `/spark`; TPS с Folia global tick |
+| Патчи Eturlia `0020`–`0086` | Мосты NeoForge API + Folia mixin/API gaps под моды |
 
-| Мод | Примечание |
-|-----|------------|
-| Farmers Delight | `ItemStack.getCraftingRemainingItem` bridged |
-| CreativeCore | ComponentSerialization + Shapes.createIndexMerger |
-| Let's Do Farm & Charm | `dropAllDeathLoot` void + TemptGoal/Cat Player fields |
-| Twilight Forest | `Boat.Type` / DamageEffects / GrassColorModifier / ItemDisplayContext extensible; `setNoRepair` / FlowerPot Supplier |
-| letmedespawn (+ Almanac) | `discard()V` в `checkDespawn` |
-| lodestone | `AttributeSupplier.Builder` copy-ctor |
-| horseman | `discard()V` в leash interact |
-| Create 6.0.10 + Aeronautics + Sable + eturlia-shim | PASS boot (патч 0083); region physics всё ещё RISK |
-| Lithostitched ≥1.7.13 + Terralith + Incendium | PASS |
-| Moonlight, Architectury*, Cloth, Kotlin, Resourceful*, WorldEdit 7.3.8 | PASS / OK* |
-| **Supplementaries** (+ Moonlight) | PASS boot (0086); amendments отдельно |
-| **quality_food** | PASS boot (0086) |
+Ядро **не** поставляет готовый набор плагинов в `plugins/` — только API Folia + вшитый spark. Всё остальное кладёте сами.
 
-### Моды — всё ещё BLOCK / не класть
+### Плагины (`plugins/`)
 
-| Мод | Почему |
-|-----|--------|
-| **amendments** (с Supplementaries) | может требовать доп. Folia bridges — проверяйте отдельно |
-| **BetterEnd / BCLib / Wunderlib / WorldWeaver** | **Fabric**, не NeoForge |
+| Правило / тип | Будет работать? | Почему |
+|---------------|-----------------|--------|
+| `folia-supported: true` в `plugin.yml` | **Да** (load/enable) | Folia иначе отказывает в загрузке |
+| Paper/Spigot **без** Folia-метки | **Нет** | Folia не грузит неподдерживаемые плагины |
+| `libraries:` в `plugin.yml` (Maven) | **Часто нет** | ModLauncher ломает Maven resolve — shade зависимости в jar |
+| RegionScheduler / EntityScheduler / GlobalRegionScheduler | **Нужно** | Один server thread на Folia нет |
+| FAWE / LuckPerms / иные Folia-сборки с Hangar | **Обычно да** | Если `folia-supported` и без битого `libraries:` |
+| Spark как отдельный плагин или `spark-neoforge` в `mods/` | **Нет / BLOCK** | Конфликт с bundled spark (JPMS) |
+| Два WorldEdit (Bukkit FAWE + NeoForge WE) | **Нельзя** | Конфликт команд/API — выберите один стек |
+
+```text
+Чеклист плагина:
+[ ] folia-supported: true
+[ ] нет libraries: ИЛИ зависимости уже shaded
+[ ] нет синхронного доступа к чужим чанкам/entity с region thread
+[ ] нет дубля функции с NeoForge-модом (два WE, два spark, …)
+```
+
+### Моды — boot PASS (индивидуальный smoke v0.2.3/0.2.4)
+
+| Мод / стек | Статус | Почему / примечание |
+|------------|--------|---------------------|
+| Architectury, Cloth, Kotlin for Forge, Bookshelf, Resourceful*, Prickle, MRU | **PASS** | Базовые libs |
+| Moonlight Lib | **PASS** | Мосты spawn/fluid/place |
+| Farmers Delight | **PASS** | `getCraftingRemainingItem` |
+| CreativeCore | **PASS** | ComponentSerialization + Shapes |
+| Let's Do Farm & Charm (+ suite без дублей) | **PASS** | void `dropAllDeathLoot`, TemptGoal Player fields |
+| Supplementaries (+ Moonlight) | **PASS** | draw/useAmmo, Creeper explode, FlowerPot.addPlant, ConditionalOps |
+| quality_food | **PASS** | setBlock/getLightBlock, craftSlots, furnace burn |
+| Twilight Forest | **PASS** boot | Extensible enums / FlowerPot / setNoRepair; геймплей **RISK** (dim/AI) |
+| letmedespawn (+ Almanac) | **PASS** | `discard()` в checkDespawn; despawn vs регионы — **RISK** |
+| lodestone | **PASS** | AttributeSupplier copy-ctor; с Malum — **RISK** |
+| horseman | **PASS** | leash `discard()` |
+| Create 6.0.10 + Aeronautics + Sable + **eturlia-shim** | **PASS** boot | Region physics/sublevels всё ещё **RISK** |
+| Lithostitched **≥1.7.13** + Terralith + Incendium | **PASS** | Не beta; datapack/mcfunction шум возможен |
+| WorldEdit NeoForge 7.3.8 | **PASS** | Патч LevelChunk / RegisterCommands |
+| Voice Chat / Emotecraft / badpackets (серверные jar) | **OK\*** | Folia у авторов; UDP/порт проверить |
+| YUNG* / dungeons datapacks | **OK\*** | Следить за генерацией |
+
+### Моды — RISK (boot часто ок, геймплей на регионах опасен)
+
+| Мод | Почему RISK |
+|-----|-------------|
+| Create / Aeronautics / Copycats / Sable | Глобальный tick, физика, sublevels |
+| Alex's Mobs + Citadel | Entity AI / глобальные тики |
+| Easy NPC (+ config UI) | Pathfinding / NPC по регионам |
+| Twilight Forest / Malum | Измерения, боссы, сложные эффекты |
+| Curios / Traveler's Backpack / combat-моды | Инвентарь и entity cross-region |
+| Amendment (с Supplementaries) | Не пере-сертифицирован на этом прогоне — проверяйте отдельно |
+
+### Моды — BLOCK / не класть
+
+| Мод / файл | Почему |
+|------------|--------|
+| **BetterEnd / BCLib / Wunderlib / WorldWeaver** | **Fabric**, не NeoForge — loader не тот |
 | **easy_npc_bundle** | JiJ пустой — ставьте отдельно `easy_npc` + `easy_npc_config_ui` |
-| spark-neoforge, Arclight sable patch (оригинал), client jars, `*.bak`/`*.jar1` | hygiene BLOCK |
-| lithostitched `*beta*` / &lt;1.7.13 | hard-block ядром |
+| `spark-neoforge` | Дубль bundled spark → JPMS crash |
+| `arclight_sable_patch` (оригинал Arclight) | Миксины под Arclight — только `…-eturlia-shim.jar` из релиза |
+| lithostitched `*beta*` / &lt;1.7.13 | Hard-block ядром |
+| Клиентские jars (JEI/WTHIT/Xaero/Iceberg/clientsort/sound-physics/…) | Dedicated server не нужен |
+| `*.bak`, `*.jar1`, дубли | Мусор / loader не подхватит |
 
-Полный ASIC ~60+ jars параллельно **не** заявлен зелёным: снимайте BLOCK/CLIENT/JUNK, затем наращивайте стек. Детали: [`docs/SMOKE_ASIC_2026-08-07.md`](./docs/SMOKE_ASIC_2026-08-07.md), [`docs/PACK_COMPAT_ASIC_2026-08.md`](./docs/PACK_COMPAT_ASIC_2026-08.md).
+Полный ASIC ~60+ jars параллельно **не** заявлен зелёным: сначала снимите BLOCK/CLIENT/JUNK, затем наращивайте стек.
 
 ### Crash-reports
 
 - Vanilla/Paper → `crash-reports/`
-- **Eturlia (с region id)** → отдельная папка `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
+- **Eturlia (с region id)** → `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
 
 ### Semver
 
-Теги `vMAJOR.MINOR.PATCH` (сейчас **v0.2.3**). Линия `0.x` — экспериментальная; ломающие NMS-патчи между минорными ожидаемы. Артефакт: `eturlia-1.21.1-neoforge-21.1.248.jar`.
+Теги `vMAJOR.MINOR.PATCH` (сейчас **v0.2.4**). Линия `0.x` — экспериментальная; ломающие NMS-патчи между минорными ожидаемы. Артефакт: `eturlia-1.21.1-neoforge-21.1.248.jar`.
 
 ## Структура репозитория
 
@@ -195,7 +235,7 @@ Boot = FML OK + `Done (...)!` + миры. Это **не** гарантия regio
 
 ## Статус патчей
 
-Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0085` (ASIC BLOCK bridges, Create/Aeronautics, Sable, Lithostitched, …).  
+Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0086` (ASIC BLOCK bridges, Create/Aeronautics, Sable, Lithostitched, Supplementaries/quality_food, …).  
 Черновики остальных WIP — в `patches/server-wip/`.
 
 ---
@@ -227,7 +267,7 @@ The goal is Folia’s multi-core scaling without giving up the NeoForge ecosyste
 | **Artifact** | `eturlia-1.21.1-neoforge-21.1.248.jar` |
 | **Launch target** | `eturliaserver` |
 | **Entry point** | `eturlia.EturliaServer` |
-| **Release** | [v0.2.3](https://github.com/eturnercus/Core/releases/tag/v0.2.3) |
+| **Release** | [v0.2.4](https://github.com/eturnercus/Core/releases/tag/v0.2.4) |
 
 ## How it works
 
@@ -314,42 +354,64 @@ Accept `eula.txt` on first boot. NeoForge mods go in `mods/`. Plugins need `foli
 Console defaults to **calm** (no green INFO). Override with `-Deturlia.console.color=full|off`.
 Plugins that declare `libraries:` in `plugin.yml` may fail Maven resolve under ModLauncher; plugins without `libraries:` load fine.
 
-## Compatibility (v0.2.3)
+## Compatibility (v0.2.4)
 
-Boot = FML OK + `Done (...)!` + worlds. Not a Folia region-safe gameplay guarantee.
+**Boot** = FML OK + `Done (...)!` + worlds up. Not a Folia region-safe gameplay guarantee.
 
-### Core and plugins
+Full ASIC audit: [`docs/PACK_COMPAT_ASIC_2026-08.md`](./docs/PACK_COMPAT_ASIC_2026-08.md) · smoke: [`docs/SMOKE_ASIC_2026-08-07.md`](./docs/SMOKE_ASIC_2026-08-07.md).
 
-| What | Status |
-|------|--------|
-| Folia API + `folia-supported: true` | Plugins load |
-| `libraries:` in `plugin.yml` | Often broken under ModLauncher — shade deps |
-| Bundled spark | OK; **do not** add `spark-neoforge` |
-| Non-Folia Paper plugins | Will not load |
+### Built into the kernel
 
-### Mods — boot PASS (v0.2.3 smoke)
+| Component | Role |
+|-----------|------|
+| Folia / Paper API | Regions, Bukkit plugins, commands, worlds |
+| NeoForge 21.1.248 + FancyModLoader | `mods/`, RegisterEvent, mod mixins |
+| **Bundled spark** | `/spark` profiling; TPS on Folia global tick |
+| Eturlia patches `0020`–`0086` | NeoForge API + Folia mixin bridges |
 
-Farmers Delight, CreativeCore, Let's Do Farm & Charm, Twilight Forest, letmedespawn (+ Almanac), lodestone, horseman, **Supplementaries** (+ Moonlight), **quality_food**, Create+Aeronautics+Sable+shim, Lithostitched≥1.7.13+Terralith+Incendium, Moonlight stack / WorldEdit 7.3.8.
+The kernel does **not** ship a plugin pack in `plugins/` — only Folia API + bundled spark. You add the rest.
 
-### Mods — still BLOCK / remove
+### Plugins (`plugins/`)
+
+| Rule / type | Works? | Why |
+|-------------|--------|-----|
+| `folia-supported: true` in `plugin.yml` | **Yes** | Folia refuses unmarked plugins |
+| Paper/Spigot without Folia flag | **No** | Folia will not load them |
+| `libraries:` in `plugin.yml` | **Often no** | Maven resolve under ModLauncher fails — shade deps |
+| Region / Entity / Global schedulers | **Required** | No single server thread |
+| FAWE / LuckPerms Folia builds | **Usually yes** | If Folia-marked and no broken `libraries:` |
+| Extra spark plugin / `spark-neoforge` | **BLOCK** | Conflicts with bundled spark |
+| Two WorldEdits (FAWE + NeoForge WE) | **Don't** | Pick one stack |
+
+### Mods — boot PASS (individual smoke)
+
+Farmers Delight, CreativeCore, Let's Do Farm & Charm, Supplementaries (+ Moonlight), quality_food, Twilight Forest, letmedespawn (+ Almanac), lodestone, horseman, Create+Aeronautics+Sable+eturlia-shim, Lithostitched≥1.7.13+Terralith+Incendium, Moonlight/Architectury/Cloth/Kotlin/Resourceful*, WorldEdit 7.3.8, Voice Chat / Emotecraft OK\*.
+
+### Mods — RISK (boot often OK; region gameplay unsafe)
+
+Create/Aeronautics/Sable physics, Alex's Mobs, Easy NPC, Twilight/Malum dimensions, Curios/backpacks/combat, amendments (not re-certified this pass).
+
+### Mods — BLOCK / remove
 
 | Mod | Why |
 |-----|-----|
-| **amendments** | Not re-certified with Supplementaries on this pass |
-| **BetterEnd / BCLib** stack | Fabric, not NeoForge |
+| **BetterEnd / BCLib / Wunderlib / WorldWeaver** | Fabric, not NeoForge |
 | **easy_npc_bundle** | Empty JiJ — use `easy_npc` + `easy_npc_config_ui` |
-| spark-neoforge, Arclight sable original, client jars, junk names | hygiene |
+| `spark-neoforge` | Duplicate bundled spark |
+| Original Arclight sable patch | Use `…-eturlia-shim.jar` from the release |
+| lithostitched beta / &lt;1.7.13 | Hard-blocked by kernel |
+| Client jars, `*.bak`, `*.jar1`, duplicates | Hygiene |
 
-Full concurrent ASIC pack is **not** claimed green. See [`docs/SMOKE_ASIC_2026-08-07.md`](./docs/SMOKE_ASIC_2026-08-07.md).
+Full concurrent ASIC pack is **not** claimed green.
 
 ### Crash reports
 
 - Vanilla/Paper → `crash-reports/`
-- **Eturlia (with region id)** → separate folder `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
+- **Eturlia (with region id)** → `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
 
 ### Semver
 
-Tags `vMAJOR.MINOR.PATCH` (currently **v0.2.3**). The `0.x` line is experimental; breaking NMS patches between minors are expected. Artifact: `eturlia-1.21.1-neoforge-21.1.248.jar`.
+Tags `vMAJOR.MINOR.PATCH` (currently **v0.2.4**). The `0.x` line is experimental; breaking NMS patches between minors are expected. Artifact: `eturlia-1.21.1-neoforge-21.1.248.jar`.
 
 ## Repository layout
 
@@ -373,7 +435,7 @@ Tags `vMAJOR.MINOR.PATCH` (currently **v0.2.3**). The `0.x` line is experimental
 
 ## Patch status
 
-Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0038` (interaction, Moonlight, spark global-tick, plugin remap).  
+Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0086` (ASIC BLOCK bridges, Create/Aeronautics, Sable, Lithostitched, Supplementaries/quality_food, …).  
 Remaining WIP drafts: `patches/server-wip/`.
 
 </details>
