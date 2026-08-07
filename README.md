@@ -127,7 +127,7 @@ Eturlia закрывает Folia↔NeoForge gaps **патчами ядра**. Н
 
 | Действие | Когда |
 |----------|--------|
-| Поставить jar **v0.2.5+** (патчи через **0094**) | libjf / respackopts / WorldWeaver больше не FATAL на `Main` |
+| Поставить jar **v0.2.5+** (патчи через **0095**) | libjf / WorldWeaver не FATAL; NeoForge-клиент проходит config handshake |
 | **Обновить** Lithostitched до **≥ 1.7.13** | Бета `1.7.10+beta4` — тот же мод, битый jar; гейт останавливает boot |
 | Оставить `spark-neoforge` / Arclight sable patch | Ядро **soft-skip** → `*.jar.eturlia-skipped` (не удаляет файл; bundled `/spark` работает). Для Sable предпочтителен `arclight_sable_patch-*-eturlia-shim.jar` |
 | Перекачать `easy_npc`, убрать `.jar1` / `.bak*` | Битые/мусорные файлы на диске, не пробел ядра |
@@ -184,7 +184,7 @@ Eturlia закрывает Folia↔NeoForge gaps **патчами ядра**. Н
 
 ## Статус патчей
 
-Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0094` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource для libjf/WorldWeaver 0094, datapack/Create/Sable и др.).  
+Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0095` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource для libjf/WorldWeaver 0094, NeoForge config handshake до Brand 0095, datapack/Create/Sable и др.).  
 Черновики остальных WIP — в `patches/server-wip/`.
 
 ---
@@ -309,7 +309,7 @@ Eturlia closes Folia↔NeoForge gaps with **kernel patches**. Do not strip ASIC 
 
 | Action | When |
 |--------|------|
-| Install jar **v0.2.5+** (patches through **0094**) | libjf / respackopts / WorldWeaver no longer FATAL on `Main` |
+| Install jar **v0.2.5+** (patches through **0095**) | libjf / WorldWeaver no FATAL; NeoForge client config handshake |
 | **Upgrade** Lithostitched to **≥ 1.7.13** | Beta `1.7.10+beta4` is the same mod, broken jar; gate aborts boot |
 | Leave `spark-neoforge` / Arclight sable patch | Kernel **soft-skips** → `*.jar.eturlia-skipped` (file kept; bundled `/spark` works). Prefer `arclight_sable_patch-*-eturlia-shim.jar` for Sable |
 | Re-download `easy_npc`; drop `.jar1` / `.bak*` | Corrupt/junk files, not a kernel gap |
@@ -366,7 +366,7 @@ Tags `vMAJOR.MINOR.PATCH` (currently **[v0.2.5](https://github.com/eturnercus/Co
 
 ## Patch status
 
-Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0094` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource for libjf/WorldWeaver 0094, datapack/Create/Sable, and more).  
+Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0095` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource for libjf/WorldWeaver 0094, NeoForge config handshake before Brand 0095, datapack/Create/Sable, and more).  
 Remaining WIP drafts: `patches/server-wip/`.
 
 </details>

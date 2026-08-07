@@ -2,6 +2,9 @@
 
 **Minecraft 1.21.1** · **NeoForge 21.1.248** · **Folia** · **Java 21**
 
+> [!IMPORTANT]
+> Этот билд **заменяет** прежний v0.2.5: исправлен отказ NeoForge-клиента «сервер не использует NeoForge» (патч **0095**).
+
 > [!CAUTION]
 > Экспериментальный релиз. **Не для продакшена.** Делайте бэкапы миров.
 
@@ -14,18 +17,19 @@ Launch target: `eturliaserver` · Entry: `eturlia.EturliaServer`
 java -jar eturlia-1.21.1-neoforge-21.1.248.jar --nogui
 ```
 
-SHA256: `1336124481ade2d9d6c2e5c310f236f4cb4a52e53a12061da7d5e3f008a7694e`
+SHA256: *(см. asset релиза после пересборки; этот файл обновляется вместе с jar)*
 
 ---
 
 ## Highlights (с v0.2.4)
 
-### Ядро — патчи через **0094**
+### Ядро — патчи через **0095**
 
 | Патчи | Что дают |
 |-------|----------|
 | **0084–0093** | ASIC BLOCK bridges: FD, CreativeCore, Farm & Charm, Supplementaries, quality_food, amendments, Moonlight ServerLevel, TF holders, food API, … |
 | **0094** | `Main.main(String[])` + `LevelStorageSource.validateAndCreateAccess(String)` — **libjf / respackopts** и **WorldWeaver / BetterEnd** больше не FATAL на Folia entrypoint |
+| **0095** | NeoForge configuration handshake: `ModdedNetworkQueryPayload` **до** Brand — клиент больше не видит сервер как vanilla (`neoforge.network.negotiation.failure.vanilla.server.not_supported`) |
 
 ### Pack hygiene без «удаляй мод»
 
@@ -68,4 +72,4 @@ SHA256: `1336124481ade2d9d6c2e5c310f236f4cb4a52e53a12061da7d5e3f008a7694e`
 
 ## English summary
 
-Kernel bridges through **0094** so Folia can host Mojang-shaped `Main.main(String[])` mixins (libjf) and WorldWeaver’s 1-arg world-folder hook. Soft-skip replaces delete-advice for spark-neoforge / Arclight sable. Update Lithostitched beta → **≥1.7.13**. Full pack gameplay still RISK.
+Kernel bridges through **0095**: Folia hosts Mojang-shaped `Main.main(String[])` mixins (libjf), WorldWeaver’s 1-arg world-folder hook, and NeoForge configuration negotiation before Brand so NeoForge clients can join. Soft-skip for spark-neoforge / Arclight sable. Update Lithostitched beta → **≥1.7.13**. Full pack gameplay still RISK.

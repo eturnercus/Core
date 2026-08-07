@@ -1,0 +1,711 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <agent@cursor.local>
+Date: Fri, 7 Aug 2026 16:18:04 +0000
+Subject: [PATCH] Eturlia: NeoForge configuration handshake before Brand
+
+Send ModdedNetworkQueryPayload/register before vanilla Brand so
+NeoForge clients negotiate ConnectionType.NEOFORGE instead of
+treating Eturlia as a vanilla server. Protocol-aware custom payload
+codecs, CommonListenerCookie ConnectionType, and listener APIs for
+NetworkRegistry.
+
+diff --git a/src/main/java/net/minecraft/network/Connection.java b/src/main/java/net/minecraft/network/Connection.java
+index cf160825199374f2c99ac200b371da95c612043c..369b608e80e034d4c66108486653b4d6c3d9fd88 100644
+--- a/src/main/java/net/minecraft/network/Connection.java
++++ b/src/main/java/net/minecraft/network/Connection.java
+@@ -119,6 +119,9 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+     private volatile DisconnectionDetails delayedDisconnect;
+     @Nullable
+     BandwidthDebugMonitor bandwidthDebugMonitor;
++    // Eturlia / NeoForge
++    @Nullable
++    private ProtocolInfo<?> inboundProtocol;
+     public String hostname = ""; // CraftBukkit - add field
+     // Paper start - NetworkClient implementation
+     public int protocolVersion;
+@@ -386,6 +389,7 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+         if (state.flow() != this.getReceiving()) {
+             throw new IllegalStateException("Invalid inbound protocol: " + String.valueOf(state.id()));
+         } else {
++            this.inboundProtocol = state; // Eturlia / NeoForge
+             this.packetListener = packetListener;
+             this.disconnectListener = null;
+             UnconfiguredPipelineHandler.InboundConfigurationTask unconfiguredpipelinehandler_b = UnconfiguredPipelineHandler.setupInboundProtocol(state);
+@@ -415,6 +419,8 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+ 
+                 unconfiguredpipelinehandler_d = unconfiguredpipelinehandler_d.andThen((channelhandlercontext) -> {
+                     channelhandlercontext.pipeline().addAfter("encoder", "unbundler", packetbundleunpacker);
++                    // Eturlia / NeoForge: filters must sit between encoder and unbundler
++                    net.neoforged.neoforge.network.filters.NetworkFilters.injectIfNecessary(this);
+                 });
+             }
+ 
+@@ -1118,4 +1124,17 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+         }
+     }
+     // Paper end - Optimize network
++
++    // Eturlia / NeoForge: API used by NetworkFilters / NetworkRegistry
++    public Channel channel() {
++        return this.channel;
++    }
++
++    public PacketFlow getDirection() {
++        return this.receiving;
++    }
++
++    public ProtocolInfo<?> getInboundProtocol() {
++        return java.util.Objects.requireNonNull(this.inboundProtocol, "Inbound protocol not set?");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/network/RegistryFriendlyByteBuf.java b/src/main/java/net/minecraft/network/RegistryFriendlyByteBuf.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8ca8b837136bbe58736f60c8c8d517a06683cbb8
+--- /dev/null
++++ b/src/main/java/net/minecraft/network/RegistryFriendlyByteBuf.java
+@@ -0,0 +1,47 @@
++package net.minecraft.network;
++
++import io.netty.buffer.ByteBuf;
++import java.util.function.Function;
++import net.minecraft.core.RegistryAccess;
++
++// Eturlia: NeoForge ConnectionType-aware buffer for modded play codecs (v0.2.5)
++public class RegistryFriendlyByteBuf extends FriendlyByteBuf {
++    private final RegistryAccess registryAccess;
++    private final net.neoforged.neoforge.network.connection.ConnectionType connectionType;
++
++    /**
++     * @deprecated Neo: use overload with ConnectionType context
++     */
++    @Deprecated
++    public RegistryFriendlyByteBuf(ByteBuf buf, RegistryAccess registryManager) {
++        super(buf);
++        this.registryAccess = registryManager;
++        this.connectionType = net.neoforged.neoforge.network.connection.ConnectionType.OTHER;
++    }
++
++    public RegistryFriendlyByteBuf(ByteBuf buf, RegistryAccess registryManager, net.neoforged.neoforge.network.connection.ConnectionType connectionType) {
++        super(buf);
++        this.registryAccess = registryManager;
++        this.connectionType = connectionType;
++    }
++
++    public net.neoforged.neoforge.network.connection.ConnectionType getConnectionType() {
++        return this.connectionType;
++    }
++
++    public RegistryAccess registryAccess() {
++        return this.registryAccess;
++    }
++
++    public static Function<ByteBuf, RegistryFriendlyByteBuf> decorator(RegistryAccess registryManager, net.neoforged.neoforge.network.connection.ConnectionType connectionType) {
++        return buf -> new RegistryFriendlyByteBuf(buf, registryManager, connectionType);
++    }
++
++    /**
++     * @deprecated Neo: use overload with ConnectionType context
++     */
++    @Deprecated
++    public static Function<ByteBuf, RegistryFriendlyByteBuf> decorator(RegistryAccess registryManager) {
++        return buf -> new RegistryFriendlyByteBuf(buf, registryManager);
++    }
++}
+diff --git a/src/main/java/net/minecraft/network/protocol/common/ClientboundCustomPayloadPacket.java b/src/main/java/net/minecraft/network/protocol/common/ClientboundCustomPayloadPacket.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..22e35e129766028e5b47fb272c4520e16efd4ac9
+--- /dev/null
++++ b/src/main/java/net/minecraft/network/protocol/common/ClientboundCustomPayloadPacket.java
+@@ -0,0 +1,83 @@
++package net.minecraft.network.protocol.common;
++
++import com.google.common.collect.Lists;
++import java.util.List;
++import net.minecraft.Util;
++import net.minecraft.network.FriendlyByteBuf;
++import net.minecraft.network.RegistryFriendlyByteBuf;
++import net.minecraft.network.codec.StreamCodec;
++import net.minecraft.network.protocol.Packet;
++import net.minecraft.network.protocol.PacketType;
++import net.minecraft.network.protocol.common.custom.BeeDebugPayload;
++import net.minecraft.network.protocol.common.custom.BrainDebugPayload;
++import net.minecraft.network.protocol.common.custom.BrandPayload;
++import net.minecraft.network.protocol.common.custom.BreezeDebugPayload;
++import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
++import net.minecraft.network.protocol.common.custom.DiscardedPayload;
++import net.minecraft.network.protocol.common.custom.GameEventDebugPayload;
++import net.minecraft.network.protocol.common.custom.GameEventListenerDebugPayload;
++import net.minecraft.network.protocol.common.custom.GameTestAddMarkerDebugPayload;
++import net.minecraft.network.protocol.common.custom.GameTestClearMarkersDebugPayload;
++import net.minecraft.network.protocol.common.custom.GoalDebugPayload;
++import net.minecraft.network.protocol.common.custom.HiveDebugPayload;
++import net.minecraft.network.protocol.common.custom.NeighborUpdatesDebugPayload;
++import net.minecraft.network.protocol.common.custom.PathfindingDebugPayload;
++import net.minecraft.network.protocol.common.custom.PoiAddedDebugPayload;
++import net.minecraft.network.protocol.common.custom.PoiRemovedDebugPayload;
++import net.minecraft.network.protocol.common.custom.PoiTicketCountDebugPayload;
++import net.minecraft.network.protocol.common.custom.RaidsDebugPayload;
++import net.minecraft.network.protocol.common.custom.StructuresDebugPayload;
++import net.minecraft.network.protocol.common.custom.VillageSectionsDebugPayload;
++import net.minecraft.network.protocol.common.custom.WorldGenAttemptDebugPayload;
++
++public record ClientboundCustomPayloadPacket(CustomPacketPayload payload) implements Packet<ClientCommonPacketListener> {
++    private static final int MAX_PAYLOAD_SIZE = 1048576;
++    public static final StreamCodec<RegistryFriendlyByteBuf, ClientboundCustomPayloadPacket> GAMEPLAY_STREAM_CODEC = CustomPacketPayload.<RegistryFriendlyByteBuf>codec(
++            id -> DiscardedPayload.codec(id, 1048576),
++            Util.make(
++                Lists.newArrayList(
++                    new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(BeeDebugPayload.TYPE, BeeDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(BrainDebugPayload.TYPE, BrainDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(BreezeDebugPayload.TYPE, BreezeDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(GameEventDebugPayload.TYPE, GameEventDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(GameEventListenerDebugPayload.TYPE, GameEventListenerDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(GameTestAddMarkerDebugPayload.TYPE, GameTestAddMarkerDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(GameTestClearMarkersDebugPayload.TYPE, GameTestClearMarkersDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(GoalDebugPayload.TYPE, GoalDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(HiveDebugPayload.TYPE, HiveDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(NeighborUpdatesDebugPayload.TYPE, NeighborUpdatesDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(PathfindingDebugPayload.TYPE, PathfindingDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(PoiAddedDebugPayload.TYPE, PoiAddedDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(PoiRemovedDebugPayload.TYPE, PoiRemovedDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(PoiTicketCountDebugPayload.TYPE, PoiTicketCountDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(RaidsDebugPayload.TYPE, RaidsDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(StructuresDebugPayload.TYPE, StructuresDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(VillageSectionsDebugPayload.TYPE, VillageSectionsDebugPayload.STREAM_CODEC),
++                    new CustomPacketPayload.TypeAndCodec<>(WorldGenAttemptDebugPayload.TYPE, WorldGenAttemptDebugPayload.STREAM_CODEC)
++                ),
++                types -> {
++                }
++            ),
++            net.minecraft.network.ConnectionProtocol.PLAY,
++            net.minecraft.network.protocol.PacketFlow.CLIENTBOUND
++        )
++        .map(ClientboundCustomPayloadPacket::new, ClientboundCustomPayloadPacket::payload);
++    public static final StreamCodec<FriendlyByteBuf, ClientboundCustomPayloadPacket> CONFIG_STREAM_CODEC = CustomPacketPayload.<FriendlyByteBuf>codec(
++            id -> DiscardedPayload.codec(id, 1048576),
++            List.of(new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC)),
++            net.minecraft.network.ConnectionProtocol.CONFIGURATION,
++            net.minecraft.network.protocol.PacketFlow.CLIENTBOUND
++        )
++        .map(ClientboundCustomPayloadPacket::new, ClientboundCustomPayloadPacket::payload);
++
++    @Override
++    public PacketType<ClientboundCustomPayloadPacket> type() {
++        return CommonPacketTypes.CLIENTBOUND_CUSTOM_PAYLOAD;
++    }
++
++    @Override
++    public void handle(ClientCommonPacketListener listener) {
++        listener.handleCustomPayload(this);
++    }
++}
+diff --git a/src/main/java/net/minecraft/network/protocol/common/ServerCommonPacketListener.java b/src/main/java/net/minecraft/network/protocol/common/ServerCommonPacketListener.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..360e51b7b7e32c170260c7c375cc0636f6e930c9
+--- /dev/null
++++ b/src/main/java/net/minecraft/network/protocol/common/ServerCommonPacketListener.java
+@@ -0,0 +1,17 @@
++package net.minecraft.network.protocol.common;
++
++import net.minecraft.network.protocol.cookie.ServerCookiePacketListener;
++import net.minecraft.network.protocol.game.ServerPacketListener;
++
++// Eturlia: explicit NeoForge extension (interface injection is not applied to Folia-mapped types)
++public interface ServerCommonPacketListener extends ServerCookiePacketListener, ServerPacketListener, net.neoforged.neoforge.common.extensions.IServerCommonPacketListenerExtension {
++    void handleKeepAlive(ServerboundKeepAlivePacket packet);
++
++    void handlePong(ServerboundPongPacket packet);
++
++    void handleCustomPayload(ServerboundCustomPayloadPacket packet);
++
++    void handleResourcePackResponse(ServerboundResourcePackPacket packet);
++
++    void handleClientInformation(ServerboundClientInformationPacket packet);
++}
+diff --git a/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java b/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java
+index 8dc01b8bc64804fa76173718f3e914b16e01cf87..faaec30327e8cd9ed355d9fa9e72110847a78d31 100644
+--- a/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java
++++ b/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java
+@@ -1,21 +1,33 @@
+ package net.minecraft.network.protocol.common;
+ 
+-import com.google.common.collect.Lists;
+ import java.util.List;
+ import net.minecraft.network.FriendlyByteBuf;
+ import net.minecraft.network.codec.StreamCodec;
+ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.network.protocol.PacketType;
+-import net.minecraft.network.protocol.common.custom.BrandPayload;
+ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+ import net.minecraft.network.protocol.common.custom.DiscardedPayload;
+ 
++// Eturlia: protocol-aware codecs so NeoForge ModdedNetworkQueryPayload decodes in CONFIG
+ public record ServerboundCustomPayloadPacket(CustomPacketPayload payload) implements Packet<ServerCommonPacketListener> {
+ 
+     private static final int MAX_PAYLOAD_SIZE = 32767;
+-    public static final StreamCodec<FriendlyByteBuf, ServerboundCustomPayloadPacket> STREAM_CODEC = CustomPacketPayload.codec((minecraftkey) -> {
+-        return DiscardedPayload.codec(minecraftkey, 32767);
+-    }, java.util.Collections.emptyList()).map(ServerboundCustomPayloadPacket::new, ServerboundCustomPayloadPacket::payload); // CraftBukkit - treat all packets the same
++    // CraftBukkit: empty vanilla list — NeoForge payloads resolved via NetworkRegistry.getCodec
++    public static final StreamCodec<FriendlyByteBuf, ServerboundCustomPayloadPacket> STREAM_CODEC = CustomPacketPayload.<FriendlyByteBuf>codec(
++            id -> DiscardedPayload.codec(id, 32767),
++            List.of(),
++            net.minecraft.network.ConnectionProtocol.PLAY,
++            net.minecraft.network.protocol.PacketFlow.SERVERBOUND
++        )
++        .map(ServerboundCustomPayloadPacket::new, ServerboundCustomPayloadPacket::payload);
++
++    public static final StreamCodec<FriendlyByteBuf, ServerboundCustomPayloadPacket> CONFIG_STREAM_CODEC = CustomPacketPayload.<FriendlyByteBuf>codec(
++            id -> DiscardedPayload.codec(id, 32767),
++            List.of(),
++            net.minecraft.network.ConnectionProtocol.CONFIGURATION,
++            net.minecraft.network.protocol.PacketFlow.SERVERBOUND
++        )
++        .map(ServerboundCustomPayloadPacket::new, ServerboundCustomPayloadPacket::payload);
+ 
+     @Override
+     public PacketType<ServerboundCustomPayloadPacket> type() {
+diff --git a/src/main/java/net/minecraft/network/protocol/common/custom/CustomPacketPayload.java b/src/main/java/net/minecraft/network/protocol/common/custom/CustomPacketPayload.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..afa0066d29b533bb3a4089480f8a82b2b4e54e9a
+--- /dev/null
++++ b/src/main/java/net/minecraft/network/protocol/common/custom/CustomPacketPayload.java
+@@ -0,0 +1,86 @@
++package net.minecraft.network.protocol.common.custom;
++
++import io.netty.buffer.ByteBuf;
++import java.util.List;
++import java.util.Map;
++import java.util.stream.Collectors;
++import net.minecraft.network.FriendlyByteBuf;
++import net.minecraft.network.codec.StreamCodec;
++import net.minecraft.network.codec.StreamDecoder;
++import net.minecraft.network.codec.StreamMemberEncoder;
++import net.minecraft.resources.ResourceLocation;
++
++// Eturlia: NeoForge protocol-aware custom payload codecs (v0.2.5 handshake)
++public interface CustomPacketPayload {
++    CustomPacketPayload.Type<? extends CustomPacketPayload> type();
++
++    static <B extends ByteBuf, T extends CustomPacketPayload> StreamCodec<B, T> codec(StreamMemberEncoder<B, T> encoder, StreamDecoder<B, T> decoder) {
++        return StreamCodec.ofMember(encoder, decoder);
++    }
++
++    static <T extends CustomPacketPayload> CustomPacketPayload.Type<T> createType(String id) {
++        return new CustomPacketPayload.Type<>(ResourceLocation.withDefaultNamespace(id));
++    }
++
++    static <B extends FriendlyByteBuf> StreamCodec<B, CustomPacketPayload> codec(
++        CustomPacketPayload.FallbackProvider<B> unknownCodecFactory,
++        List<CustomPacketPayload.TypeAndCodec<? super B, ?>> types,
++        net.minecraft.network.ConnectionProtocol protocol,
++        net.minecraft.network.protocol.PacketFlow packetFlow
++    ) {
++        final Map<ResourceLocation, StreamCodec<? super B, ? extends CustomPacketPayload>> map = types.stream()
++            .collect(Collectors.toUnmodifiableMap(type -> type.type().id(), CustomPacketPayload.TypeAndCodec::codec));
++        return new StreamCodec<B, CustomPacketPayload>() {
++            private StreamCodec<? super B, ? extends CustomPacketPayload> findCodec(ResourceLocation id) {
++                StreamCodec<? super B, ? extends CustomPacketPayload> streamCodec = map.get(id);
++                if (streamCodec == null) {
++                    streamCodec = net.neoforged.neoforge.network.registration.NetworkRegistry.getCodec(id, protocol, packetFlow);
++                }
++                return streamCodec != null ? streamCodec : unknownCodecFactory.create(id);
++            }
++
++            private <T extends CustomPacketPayload> void writeCap(B value, CustomPacketPayload.Type<T> id, CustomPacketPayload payload) {
++                value.writeResourceLocation(id.id());
++                StreamCodec<B, T> streamCodec = (StreamCodec<B, T>) this.findCodec(id.id());
++                try {
++                    streamCodec.encode(value, (T) payload);
++                } catch (RuntimeException e) {
++                    throw new RuntimeException("Failed encoding custom payload " + id.id() + ": " + e, e);
++                }
++            }
++
++            @Override
++            public void encode(B friendlyByteBuf, CustomPacketPayload customPacketPayload) {
++                this.writeCap(friendlyByteBuf, customPacketPayload.type(), customPacketPayload);
++            }
++
++            @Override
++            public CustomPacketPayload decode(B friendlyByteBuf) {
++                ResourceLocation resourceLocation = friendlyByteBuf.readResourceLocation();
++                try {
++                    return (CustomPacketPayload) this.findCodec(resourceLocation).decode(friendlyByteBuf);
++                } catch (RuntimeException e) {
++                    throw new RuntimeException("Failed decoding custom payload " + resourceLocation + ": " + e, e);
++                }
++            }
++        };
++    }
++
++    default net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket toVanillaClientbound() {
++        return new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(this);
++    }
++
++    default net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket toVanillaServerbound() {
++        return new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(this);
++    }
++
++    public interface FallbackProvider<B extends FriendlyByteBuf> {
++        StreamCodec<B, ? extends CustomPacketPayload> create(ResourceLocation id);
++    }
++
++    public static record Type<T extends CustomPacketPayload>(ResourceLocation id) {
++    }
++
++    public static record TypeAndCodec<B extends FriendlyByteBuf, T extends CustomPacketPayload>(CustomPacketPayload.Type<T> type, StreamCodec<B, T> codec) {
++    }
++}
+diff --git a/src/main/java/net/minecraft/network/protocol/configuration/ConfigurationProtocols.java b/src/main/java/net/minecraft/network/protocol/configuration/ConfigurationProtocols.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..aa8de67831d03503fc19272fefb27f739efc7db3
+--- /dev/null
++++ b/src/main/java/net/minecraft/network/protocol/configuration/ConfigurationProtocols.java
+@@ -0,0 +1,62 @@
++package net.minecraft.network.protocol.configuration;
++
++import net.minecraft.network.ConnectionProtocol;
++import net.minecraft.network.FriendlyByteBuf;
++import net.minecraft.network.ProtocolInfo;
++import net.minecraft.network.protocol.ProtocolInfoBuilder;
++import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
++import net.minecraft.network.protocol.common.ClientboundCustomReportDetailsPacket;
++import net.minecraft.network.protocol.common.ClientboundDisconnectPacket;
++import net.minecraft.network.protocol.common.ClientboundKeepAlivePacket;
++import net.minecraft.network.protocol.common.ClientboundPingPacket;
++import net.minecraft.network.protocol.common.ClientboundResourcePackPopPacket;
++import net.minecraft.network.protocol.common.ClientboundResourcePackPushPacket;
++import net.minecraft.network.protocol.common.ClientboundServerLinksPacket;
++import net.minecraft.network.protocol.common.ClientboundStoreCookiePacket;
++import net.minecraft.network.protocol.common.ClientboundTransferPacket;
++import net.minecraft.network.protocol.common.ClientboundUpdateTagsPacket;
++import net.minecraft.network.protocol.common.CommonPacketTypes;
++import net.minecraft.network.protocol.common.ServerboundClientInformationPacket;
++import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
++import net.minecraft.network.protocol.common.ServerboundKeepAlivePacket;
++import net.minecraft.network.protocol.common.ServerboundPongPacket;
++import net.minecraft.network.protocol.common.ServerboundResourcePackPacket;
++import net.minecraft.network.protocol.cookie.ClientboundCookieRequestPacket;
++import net.minecraft.network.protocol.cookie.CookiePacketTypes;
++import net.minecraft.network.protocol.cookie.ServerboundCookieResponsePacket;
++
++public class ConfigurationProtocols {
++    public static final ProtocolInfo.Unbound<ServerConfigurationPacketListener, FriendlyByteBuf> SERVERBOUND_TEMPLATE = ProtocolInfoBuilder.serverboundProtocol(
++        ConnectionProtocol.CONFIGURATION,
++        builder -> builder.addPacket(CommonPacketTypes.SERVERBOUND_CLIENT_INFORMATION, ServerboundClientInformationPacket.STREAM_CODEC)
++                .addPacket(CookiePacketTypes.SERVERBOUND_COOKIE_RESPONSE, ServerboundCookieResponsePacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.SERVERBOUND_CUSTOM_PAYLOAD, ServerboundCustomPayloadPacket.CONFIG_STREAM_CODEC) // Eturlia/Neo: protocol-aware
++                .addPacket(ConfigurationPacketTypes.SERVERBOUND_FINISH_CONFIGURATION, ServerboundFinishConfigurationPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.SERVERBOUND_KEEP_ALIVE, ServerboundKeepAlivePacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.SERVERBOUND_PONG, ServerboundPongPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.SERVERBOUND_RESOURCE_PACK, ServerboundResourcePackPacket.STREAM_CODEC)
++                .addPacket(ConfigurationPacketTypes.SERVERBOUND_SELECT_KNOWN_PACKS, ServerboundSelectKnownPacks.STREAM_CODEC)
++    );
++    public static final ProtocolInfo<ServerConfigurationPacketListener> SERVERBOUND = SERVERBOUND_TEMPLATE.bind(FriendlyByteBuf::new);
++    public static final ProtocolInfo.Unbound<ClientConfigurationPacketListener, FriendlyByteBuf> CLIENTBOUND_TEMPLATE = ProtocolInfoBuilder.clientboundProtocol(
++        ConnectionProtocol.CONFIGURATION,
++        builder -> builder.addPacket(CookiePacketTypes.CLIENTBOUND_COOKIE_REQUEST, ClientboundCookieRequestPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_CUSTOM_PAYLOAD, ClientboundCustomPayloadPacket.CONFIG_STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_DISCONNECT, ClientboundDisconnectPacket.STREAM_CODEC)
++                .addPacket(ConfigurationPacketTypes.CLIENTBOUND_FINISH_CONFIGURATION, ClientboundFinishConfigurationPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_KEEP_ALIVE, ClientboundKeepAlivePacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_PING, ClientboundPingPacket.STREAM_CODEC)
++                .addPacket(ConfigurationPacketTypes.CLIENTBOUND_RESET_CHAT, ClientboundResetChatPacket.STREAM_CODEC)
++                .addPacket(ConfigurationPacketTypes.CLIENTBOUND_REGISTRY_DATA, ClientboundRegistryDataPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_RESOURCE_PACK_POP, ClientboundResourcePackPopPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_RESOURCE_PACK_PUSH, ClientboundResourcePackPushPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_STORE_COOKIE, ClientboundStoreCookiePacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_TRANSFER, ClientboundTransferPacket.STREAM_CODEC)
++                .addPacket(ConfigurationPacketTypes.CLIENTBOUND_UPDATE_ENABLED_FEATURES, ClientboundUpdateEnabledFeaturesPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_UPDATE_TAGS, ClientboundUpdateTagsPacket.STREAM_CODEC)
++                .addPacket(ConfigurationPacketTypes.CLIENTBOUND_SELECT_KNOWN_PACKS, ClientboundSelectKnownPacks.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_CUSTOM_REPORT_DETAILS, ClientboundCustomReportDetailsPacket.STREAM_CODEC)
++                .addPacket(CommonPacketTypes.CLIENTBOUND_SERVER_LINKS, ClientboundServerLinksPacket.STREAM_CODEC)
++    );
++    public static final ProtocolInfo<ClientConfigurationPacketListener> CLIENTBOUND = CLIENTBOUND_TEMPLATE.bind(FriendlyByteBuf::new);
++}
+diff --git a/src/main/java/net/minecraft/network/protocol/configuration/ServerConfigurationPacketListener.java b/src/main/java/net/minecraft/network/protocol/configuration/ServerConfigurationPacketListener.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..0fffefe369945ea5085c02e4f83a89279ba61a9f
+--- /dev/null
++++ b/src/main/java/net/minecraft/network/protocol/configuration/ServerConfigurationPacketListener.java
+@@ -0,0 +1,16 @@
++package net.minecraft.network.protocol.configuration;
++
++import net.minecraft.network.ConnectionProtocol;
++import net.minecraft.network.protocol.common.ServerCommonPacketListener;
++
++// Eturlia: explicit NeoForge extension for configuration tasks (finishCurrentTask)
++public interface ServerConfigurationPacketListener extends ServerCommonPacketListener, net.neoforged.neoforge.common.extensions.IServerConfigurationPacketListenerExtension {
++    @Override
++    default ConnectionProtocol protocol() {
++        return ConnectionProtocol.CONFIGURATION;
++    }
++
++    void handleConfigurationFinished(ServerboundFinishConfigurationPacket packet);
++
++    void handleSelectKnownPacks(ServerboundSelectKnownPacks packet);
++}
+diff --git a/src/main/java/net/minecraft/server/network/CommonListenerCookie.java b/src/main/java/net/minecraft/server/network/CommonListenerCookie.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f21acfae6a0beee3183ab4ed0a06c5780e7e426
+--- /dev/null
++++ b/src/main/java/net/minecraft/server/network/CommonListenerCookie.java
+@@ -0,0 +1,19 @@
++package net.minecraft.server.network;
++
++import com.mojang.authlib.GameProfile;
++import net.minecraft.server.level.ClientInformation;
++
++// Eturlia: NeoForge ConnectionType for configuration handshake (v0.2.5)
++public record CommonListenerCookie(GameProfile gameProfile, int latency, ClientInformation clientInformation, boolean transferred, net.neoforged.neoforge.network.connection.ConnectionType connectionType) {
++    /**
++     * @deprecated Use the overload with {@link net.neoforged.neoforge.network.connection.ConnectionType}.
++     */
++    @Deprecated
++    public CommonListenerCookie(GameProfile gameProfile, int latency, ClientInformation clientInformation, boolean transferred) {
++        this(gameProfile, latency, clientInformation, transferred, net.neoforged.neoforge.network.connection.ConnectionType.OTHER);
++    }
++
++    public static CommonListenerCookie createInitial(GameProfile profile, boolean bl) {
++        return new CommonListenerCookie(profile, 0, ClientInformation.createDefault(), bl);
++    }
++}
+diff --git a/src/main/java/net/minecraft/server/network/ConfigurationTask.java b/src/main/java/net/minecraft/server/network/ConfigurationTask.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3d8a76994e23eaab4210c00974f7cd3fca412f1
+--- /dev/null
++++ b/src/main/java/net/minecraft/server/network/ConfigurationTask.java
+@@ -0,0 +1,22 @@
++package net.minecraft.server.network;
++
++import java.util.function.Consumer;
++import net.minecraft.network.protocol.Packet;
++
++public interface ConfigurationTask {
++    void start(Consumer<Packet<?>> sender);
++
++    ConfigurationTask.Type type();
++
++    public static record Type(String id) {
++        // Eturlia / NeoForge: ResourceLocation-based task ids
++        public Type(net.minecraft.resources.ResourceLocation location) {
++            this(location.toString());
++        }
++
++        @Override
++        public String toString() {
++            return this.id;
++        }
++    }
++}
+diff --git a/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+index ea99a4e39cdfb4eeebc299030f7768b9c684df4e..c526629d6ba3c5129ca8e69ce12afa24371c4653 100644
+--- a/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+@@ -84,6 +84,8 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+     public final java.util.Map<java.util.UUID, net.kyori.adventure.resource.ResourcePackCallback> packCallbacks = new java.util.concurrent.ConcurrentHashMap<>(); // Paper - adventure resource pack callbacks
+     private static final long KEEPALIVE_LIMIT = Long.getLong("paper.playerconnection.keepalive", 30) * 1000; // Paper - provide property to set keepalive limit
+     protected static final ResourceLocation MINECRAFT_BRAND = ResourceLocation.withDefaultNamespace("brand"); // Paper - Brand support
++    // Eturlia / NeoForge: connection type from configuration handshake
++    protected net.neoforged.neoforge.network.connection.ConnectionType connectionType;
+ 
+     public ServerCommonPacketListenerImpl(MinecraftServer minecraftserver, Connection networkmanager, CommonListenerCookie commonlistenercookie, ServerPlayer player) { // CraftBukkit
+         this.server = minecraftserver;
+@@ -91,6 +93,7 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+         this.keepAliveTime = Util.getMillis();
+         this.latency = commonlistenercookie.latency();
+         this.transferred = commonlistenercookie.transferred();
++        this.connectionType = commonlistenercookie.connectionType(); // Eturlia / NeoForge
+         // CraftBukkit start - add fields and methods
+         this.player = player;
+         this.player.transferCookieConnection = this;
+@@ -162,6 +165,27 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+ 
+     @Override
+     public void handleCustomPayload(ServerboundCustomPayloadPacket packet) {
++        // Eturlia / NeoForge: register/unregister + modded payload handling before Bukkit discarded path
++        if (packet.payload() instanceof net.neoforged.neoforge.network.payload.MinecraftRegisterPayload minecraftRegisterPayload) {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.onMinecraftRegister(this.getConnection(), minecraftRegisterPayload.newChannels());
++            return;
++        }
++        if (packet.payload() instanceof net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload minecraftUnregisterPayload) {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.onMinecraftUnregister(this.getConnection(), minecraftUnregisterPayload.forgottenChannels());
++            return;
++        }
++        if (packet.payload() instanceof net.neoforged.neoforge.network.payload.CommonVersionPayload commonVersionPayload) {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.checkCommonVersion(this, commonVersionPayload);
++            return;
++        }
++        if (packet.payload() instanceof net.neoforged.neoforge.network.payload.CommonRegisterPayload commonRegisterPayload) {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.onCommonRegister(this, commonRegisterPayload);
++            return;
++        }
++        if (net.neoforged.neoforge.network.registration.NetworkRegistry.isModdedPayload(packet.payload())) {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.handleModdedPayload(this, packet);
++            return;
++        }
+         // Paper start - Brand support
+         if (packet.payload() instanceof net.minecraft.network.protocol.common.custom.BrandPayload brandPayload) {
+             this.player.clientBrandName = brandPayload.brand();
+@@ -306,7 +330,10 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+         this.send(packet, (PacketSendListener) null);
+     }
+ 
++    @Override
+     public void send(Packet<?> packet, @Nullable PacketSendListener callbacks) {
++        // Eturlia / NeoForge: validate modded outbound payloads
++        net.neoforged.neoforge.network.registration.NetworkRegistry.checkPacket(packet, this);
+         // CraftBukkit start
+         if (packet == null || this.processedDisconnect) { // Spigot
+             return;
+@@ -425,7 +452,30 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+         return this.latency;
+     }
+ 
++    /**
++     * @deprecated Prefer {@link #createCookie(ClientInformation, net.neoforged.neoforge.network.connection.ConnectionType)}
++     */
++    @Deprecated
+     protected CommonListenerCookie createCookie(ClientInformation syncedOptions) {
+         return new CommonListenerCookie(this.playerProfile(), this.latency, syncedOptions, this.transferred);
+     }
++
++    protected CommonListenerCookie createCookie(ClientInformation syncedOptions, net.neoforged.neoforge.network.connection.ConnectionType connectionType) {
++        return new CommonListenerCookie(this.playerProfile(), this.latency, syncedOptions, this.transferred, connectionType);
++    }
++
++    @Override
++    public Connection getConnection() {
++        return this.connection;
++    }
++
++    @Override
++    public net.minecraft.util.thread.ReentrantBlockableEventLoop<?> getMainThreadEventLoop() {
++        return this.server;
++    }
++
++    @Override
++    public net.neoforged.neoforge.network.connection.ConnectionType getConnectionType() {
++        return this.connectionType;
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+index fe4678733af1195f1081ec14c08ea733d15ae869..b3490c0c36f530e48c79698e884eb328adad6c73 100644
+--- a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+@@ -85,6 +85,15 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+     }
+ 
+     public void startConfiguration() {
++        // Eturlia / NeoForge: negotiate modded channels BEFORE vanilla Brand, otherwise NeoForge clients treat the server as vanilla
++        this.send(new net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload(net.neoforged.neoforge.network.registration.NetworkRegistry.getInitialServerUnregisterChannels()));
++        this.send(new net.neoforged.neoforge.network.payload.MinecraftRegisterPayload(net.neoforged.neoforge.network.registration.NetworkRegistry.getInitialListeningChannels(this.flow())));
++        this.send(new net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload(java.util.Map.of()));
++        this.send(new net.minecraft.network.protocol.common.ClientboundPingPacket(0));
++    }
++
++    // Eturlia / NeoForge: vanilla configuration runs after pong(0) completes channel negotiation
++    private void runConfiguration() {
+         this.send(new ClientboundCustomPayloadPacket(new BrandPayload(this.server.getServerModName())));
+         ServerLinks serverlinks = this.server.serverLinks();
+         // CraftBukkit start
+@@ -104,6 +113,8 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+         }).toList();
+ 
+         this.send(new ClientboundUpdateEnabledFeaturesPacket(FeatureFlags.REGISTRY.toNames(this.server.getWorldData().enabledFeatures())));
++        // Eturlia / NeoForge: early tasks before SynchronizeRegistriesTask
++        net.neoforged.neoforge.network.ConfigurationInitialization.configureEarlyTasks(this, this.configurationTasks::add);
+         this.synchronizeRegistriesTask = new SynchronizeRegistriesTask(list, layeredregistryaccess);
+         this.configurationTasks.add(this.synchronizeRegistriesTask);
+         this.addOptionalTasks();
+@@ -120,6 +131,29 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+         this.server.getServerResourcePack().ifPresent((minecraftserver_serverresourcepackinfo) -> {
+             this.configurationTasks.add(new ServerResourcePackConfigurationTask(minecraftserver_serverresourcepackinfo));
+         });
++        // Eturlia / NeoForge: mod configuration tasks
++        this.configurationTasks.addAll(net.neoforged.fml.ModLoader.postEventWithReturn(new net.neoforged.neoforge.network.event.RegisterConfigurationTasksEvent(this)).getConfigurationTasks());
++    }
++
++    @Override
++    public void handleCustomPayload(net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket packet) {
++        if (packet.payload() instanceof net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload moddedEnvironmentPayload) {
++            this.connectionType = net.neoforged.neoforge.network.connection.ConnectionType.NEOFORGE;
++            net.neoforged.neoforge.network.registration.NetworkRegistry.initializeNeoForgeConnection(this, moddedEnvironmentPayload.queries());
++            return;
++        }
++        super.handleCustomPayload(packet);
++    }
++
++    @Override
++    public void handlePong(net.minecraft.network.protocol.common.ServerboundPongPacket packet) {
++        super.handlePong(packet);
++        if (packet.getId() == 0) {
++            if (!this.connectionType.isNeoForge() && !net.neoforged.neoforge.network.registration.NetworkRegistry.initializeOtherConnection(this)) {
++                return;
++            }
++            this.runConfiguration();
++        }
+     }
+ 
+     @Override
+@@ -152,7 +186,12 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+     public void handleConfigurationFinished(ServerboundFinishConfigurationPacket packet) {
+         PacketUtils.ensureRunningOnSameThread(packet, this, (BlockableEventLoop) this.server);
+         this.finishCurrentTask(JoinWorldTask.TYPE);
+-        this.connection.setupOutboundProtocol(GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(this.server.registryAccess())));
++        this.connection.setupOutboundProtocol(GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(this.server.registryAccess(), this.connectionType)));
++        // Eturlia / NeoForge: finish configuration networking after outbound play protocol is ready
++        if (this.connectionType == net.neoforged.neoforge.network.connection.ConnectionType.OTHER) {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.initializeNeoForgeConnection(this, java.util.Map.of());
++        }
++        net.neoforged.neoforge.network.registration.NetworkRegistry.onConfigurationFinished(this);
+ 
+         try {
+             PlayerList playerlist = this.server.getPlayerList();
+@@ -173,7 +212,7 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+ 
+             // Folia start - region threading - rewrite login process
+             io.papermc.paper.threadedregions.RegionizedServer.ensureGlobalTickThread("Cannot handle player login off global tick thread");
+-            CommonListenerCookie clientData = this.createCookie(this.clientInformation);
++            CommonListenerCookie clientData = this.createCookie(this.clientInformation, this.connectionType);
+             org.apache.commons.lang3.mutable.MutableObject<net.minecraft.nbt.CompoundTag> data = new org.apache.commons.lang3.mutable.MutableObject<>();
+             org.apache.commons.lang3.mutable.MutableObject<String> lastKnownName = new org.apache.commons.lang3.mutable.MutableObject<>();
+             ca.spottedleaf.concurrentutil.completable.Completable<org.bukkit.Location> toComplete = new ca.spottedleaf.concurrentutil.completable.Completable<>();
+@@ -255,7 +294,7 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+         }
+     }
+ 
+-    private void finishCurrentTask(ConfigurationTask.Type key) {
++    public void finishCurrentTask(ConfigurationTask.Type key) {
+         ConfigurationTask.Type configurationtask_a1 = this.currentTask != null ? this.currentTask.type() : null;
+ 
+         if (!key.equals(configurationtask_a1)) {
+diff --git a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index e40f702973e532de4926f4f3f12110f1332639f2..3abf3be11d990e097241a9ed0fed70ee6b035089 100644
+--- a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -3692,7 +3692,7 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
+         if (!this.waitingForSwitchToConfig) {
+             throw new IllegalStateException("Client acknowledged config, but none was requested");
+         } else {
+-            this.connection.setupInboundProtocol(ConfigurationProtocols.SERVERBOUND, new ServerConfigurationPacketListenerImpl(this.server, this.connection, this.createCookie(this.player.clientInformation()), this.player)); // CraftBukkit
++            this.connection.setupInboundProtocol(ConfigurationProtocols.SERVERBOUND, new ServerConfigurationPacketListenerImpl(this.server, this.connection, this.createCookie(this.player.clientInformation(), this.connectionType), this.player)); // CraftBukkit // Eturlia: keep ConnectionType
+         }
+     }
+ 
+diff --git a/src/main/java/net/minecraft/server/players/PlayerList.java b/src/main/java/net/minecraft/server/players/PlayerList.java
+index 3a06a13e88759c35f5cc821528d5faca3e9330de..4728302b6fe1d8a63b474d2322f03265f771e030 100644
+--- a/src/main/java/net/minecraft/server/players/PlayerList.java
++++ b/src/main/java/net/minecraft/server/players/PlayerList.java
+@@ -407,7 +407,7 @@ public abstract class PlayerList {
+         worldserver1.getCurrentWorldData().connections.add(connection);
+         // Folia end - rewrite login process
+ 
+-        connection.setupInboundProtocol(GameProtocols.SERVERBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(this.server.registryAccess())), playerconnection);
++        connection.setupInboundProtocol(GameProtocols.SERVERBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(this.server.registryAccess(), playerconnection.getConnectionType())), playerconnection);
+         GameRules gamerules = worldserver1.getGameRules();
+         boolean flag = gamerules.getBoolean(GameRules.RULE_DO_IMMEDIATE_RESPAWN);
+         boolean flag1 = gamerules.getBoolean(GameRules.RULE_REDUCEDDEBUGINFO);
