@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Eturlia <eturlia@eturnercus.dev>
+From: Cursor Agent <cursoragent@cursor.com>
 Date: Thu, 6 Aug 2026 21:25:47 +0000
 Subject: [PATCH] Eturlia: rename isPositionTicking(Entity) for Sable plot
  mixin
