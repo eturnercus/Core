@@ -285,6 +285,12 @@ gradle.projectsEvaluated {
     val eturliaCoreJar = server.tasks.register("eturliaCoreJar", Jar::class.java) {
         from(server.layout.buildDirectory.dir("eturlia/core-classes"))
         from(eturliaCoreResources)
+        // The compatibility manifest has to live in *this* jar, not just the outer launcher
+        // jar: EturliaModLoadingPlugin loads it with getResourceAsStream, and at runtime it
+        // runs from the extracted eturlia-core.jar. The launcher jar is not on the server
+        // JVM's classpath, so a copy only there is unreachable — the smoke log said exactly
+        // that: "Manifest resource not found: /eturlia-supported.json".
+        from(rootProject.file("build-data/eturlia-supported.json"))
         archiveFileName.set("eturlia-core.jar")
         destinationDirectory.set(server.layout.buildDirectory.dir("eturlia/intermediate-jars"))
         dependsOn(compileEturliaCore)
@@ -439,7 +445,10 @@ gradle.projectsEvaluated {
         from(stagingDir.map { it.dir("libraries") }) { into("META-INF/eturlia-libraries") }
         from(stagingDir.map { it.file("eturlia-libraries.index") }) { into("META-INF") }
         from(eturliaBootstrapLibs) { into("META-INF/eturlia-bootstrap") }
-        from(rootProject.file("folia-server/eturlia-supported.json")) { into("META-INF") }
+        // build-data/, not folia-server/: on a case-insensitive filesystem the generated
+        // Folia-Server tree lands on top of folia-server/ and wipes tracked files there.
+        // That is how this manifest disappeared from the jar once already.
+        from(rootProject.file("build-data/eturlia-supported.json")) { into("META-INF") }
         from(rootProject.file("build-data/eturlia-launcher/src/main/resources/eturlia")) { into("eturlia") }
         doFirst {
             if (eturliaBootstrapLibs.files.isEmpty()) {
