@@ -17,7 +17,7 @@ Launch target: `eturliaserver` · Entry: `eturlia.EturliaServer`
 java -jar eturlia-1.21.1-neoforge-21.1.248.jar --nogui
 ```
 
-SHA256: *(см. asset релиза после пересборки; этот файл обновляется вместе с jar)*
+SHA256: `6abcf7e48bbcb86bb09cd312a6d1d8d1adf64bea187a78ca2b99bbf8182c77d7`
 
 ---
 
