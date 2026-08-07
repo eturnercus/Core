@@ -3,7 +3,7 @@
 **Minecraft 1.21.1** · **NeoForge 21.1.248** · **Folia** · **Java 21**
 
 > [!IMPORTANT]
-> Этот билд **заменяет** прежний v0.2.5: исправлен отказ NeoForge-клиента «сервер не использует NeoForge» (патч **0095**).
+> Этот билд **заменяет** прежний v0.2.5: повторный фикс handshake (патчи **0095–0096**: builtins в CONFIG codec) + soft-skip WorldEdit NeoForge (ставьте WE как Folia-плагин).
 
 > [!CAUTION]
 > Экспериментальный релиз. **Не для продакшена.** Делайте бэкапы миров.
@@ -17,25 +17,27 @@ Launch target: `eturliaserver` · Entry: `eturlia.EturliaServer`
 java -jar eturlia-1.21.1-neoforge-21.1.248.jar --nogui
 ```
 
-SHA256: `6abcf7e48bbcb86bb09cd312a6d1d8d1adf64bea187a78ca2b99bbf8182c77d7`
+SHA256: `52636667e30597fa8099478f97c9bc29a3799925056f6e4f09e4ef3e6245a7df`
 
 ---
 
 ## Highlights (с v0.2.4)
 
-### Ядро — патчи через **0095**
+### Ядро — патчи через **0096**
 
 | Патчи | Что дают |
 |-------|----------|
 | **0084–0093** | ASIC BLOCK bridges: FD, CreativeCore, Farm & Charm, Supplementaries, quality_food, amendments, Moonlight ServerLevel, TF holders, food API, … |
 | **0094** | `Main.main(String[])` + `LevelStorageSource.validateAndCreateAccess(String)` — **libjf / respackopts** и **WorldWeaver / BetterEnd** больше не FATAL на Folia entrypoint |
-| **0095** | NeoForge configuration handshake: `ModdedNetworkQueryPayload` **до** Brand — клиент больше не видит сервер как vanilla (`neoforge.network.negotiation.failure.vanilla.server.not_supported`) |
+| **0095** | NeoForge configuration handshake: `ModdedNetworkQueryPayload` **до** Brand |
+| **0096** | CONFIG codecs embed NeoForge builtins; Brand after pong on server thread; checkPacket UOE → clean disconnect |
 
 ### Pack hygiene без «удаляй мод»
 
 | Ситуация | Поведение Eturlia |
 |----------|-------------------|
 | `spark-*-neoforge.jar` в `mods/` | Soft-skip → `*.jar.eturlia-skipped` (bundled Folia spark остаётся; `/spark` работает) |
+| **WorldEdit / FAWE NeoForge** в `mods/` | Soft-skip — ставьте **WorldEdit/FAWE Folia-плагин** в `plugins/` |
 | Оригинальный `arclight_sable_patch` (Arclight) | Soft-skip; для placeholder modId — `*-eturlia-shim.jar` |
 | `lithostitched-1.7.10+beta4` | Hard gate — **обновите jar до ≥ 1.7.13** (тот же мод; бета крашит TemplateLists) |
 | Битый `easy_npc` (`0.0NONE`), `.jar1` / `.bak` | Не ядро: перекачать / не тот суффикс |
@@ -72,4 +74,4 @@ SHA256: `6abcf7e48bbcb86bb09cd312a6d1d8d1adf64bea187a78ca2b99bbf8182c77d7`
 
 ## English summary
 
-Kernel bridges through **0095**: Folia hosts Mojang-shaped `Main.main(String[])` mixins (libjf), WorldWeaver’s 1-arg world-folder hook, and NeoForge configuration negotiation before Brand so NeoForge clients can join. Soft-skip for spark-neoforge / Arclight sable. Update Lithostitched beta → **≥1.7.13**. Full pack gameplay still RISK.
+Kernel bridges through **0096**: Folia hosts Mojang-shaped `Main.main(String[])` mixins (libjf), WorldWeaver’s 1-arg world-folder hook, and NeoForge configuration negotiation before Brand so NeoForge clients can join. Soft-skip for spark-neoforge / Arclight sable. Update Lithostitched beta → **≥1.7.13**. Full pack gameplay still RISK.

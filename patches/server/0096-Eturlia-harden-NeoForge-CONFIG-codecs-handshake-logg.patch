@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <agent@cursor.local>
+Date: Fri, 7 Aug 2026 16:43:15 +0000
+Subject: [PATCH] Eturlia: harden NeoForge CONFIG codecs + handshake logging
+
+Embed NeoForge builtin payloads in CONFIG StreamCodecs so handshake
+encode/decode does not rely on NetworkRegistry.getCodec alone. Run
+Brand after pong on the server thread; catch checkPacket UOE.
+
+diff --git a/src/main/java/net/minecraft/network/protocol/common/ClientboundCustomPayloadPacket.java b/src/main/java/net/minecraft/network/protocol/common/ClientboundCustomPayloadPacket.java
+index 22e35e129766028e5b47fb272c4520e16efd4ac9..f8fc5c324f97eddbf5a3a632825a2f22231b2443 100644
+--- a/src/main/java/net/minecraft/network/protocol/common/ClientboundCustomPayloadPacket.java
++++ b/src/main/java/net/minecraft/network/protocol/common/ClientboundCustomPayloadPacket.java
+@@ -63,9 +63,20 @@ public record ClientboundCustomPayloadPacket(CustomPacketPayload payload) implem
+             net.minecraft.network.protocol.PacketFlow.CLIENTBOUND
+         )
+         .map(ClientboundCustomPayloadPacket::new, ClientboundCustomPayloadPacket::payload);
++    // Eturlia: register NeoForge handshake builtins in the CONFIG codec map itself so encode/decode
++    // does not depend on NetworkRegistry.getCodec being visible on the encoding thread/classloader.
+     public static final StreamCodec<FriendlyByteBuf, ClientboundCustomPayloadPacket> CONFIG_STREAM_CODEC = CustomPacketPayload.<FriendlyByteBuf>codec(
+             id -> DiscardedPayload.codec(id, 1048576),
+-            List.of(new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC)),
++            List.of(
++                new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.MinecraftRegisterPayload.TYPE, net.neoforged.neoforge.network.payload.MinecraftRegisterPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload.TYPE, net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload.TYPE, net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.ModdedNetworkPayload.TYPE, net.neoforged.neoforge.network.payload.ModdedNetworkPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.ModdedNetworkSetupFailedPayload.TYPE, net.neoforged.neoforge.network.payload.ModdedNetworkSetupFailedPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.CommonVersionPayload.TYPE, net.neoforged.neoforge.network.payload.CommonVersionPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.CommonRegisterPayload.TYPE, net.neoforged.neoforge.network.payload.CommonRegisterPayload.STREAM_CODEC)
++            ),
+             net.minecraft.network.ConnectionProtocol.CONFIGURATION,
+             net.minecraft.network.protocol.PacketFlow.CLIENTBOUND
+         )
+diff --git a/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java b/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java
+index faaec30327e8cd9ed355d9fa9e72110847a78d31..ee2900d9f0f1e764011fc2fc7b3c77ffc25dee7b 100644
+--- a/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java
++++ b/src/main/java/net/minecraft/network/protocol/common/ServerboundCustomPayloadPacket.java
+@@ -21,9 +21,16 @@ public record ServerboundCustomPayloadPacket(CustomPacketPayload payload) implem
+         )
+         .map(ServerboundCustomPayloadPacket::new, ServerboundCustomPayloadPacket::payload);
+ 
++    // Eturlia: same builtin NeoForge CONFIG payloads as clientbound — critical for ModdedNetworkQuery reply
+     public static final StreamCodec<FriendlyByteBuf, ServerboundCustomPayloadPacket> CONFIG_STREAM_CODEC = CustomPacketPayload.<FriendlyByteBuf>codec(
+             id -> DiscardedPayload.codec(id, 32767),
+-            List.of(),
++            List.of(
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.MinecraftRegisterPayload.TYPE, net.neoforged.neoforge.network.payload.MinecraftRegisterPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload.TYPE, net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload.TYPE, net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.CommonVersionPayload.TYPE, net.neoforged.neoforge.network.payload.CommonVersionPayload.STREAM_CODEC),
++                new CustomPacketPayload.TypeAndCodec<>(net.neoforged.neoforge.network.payload.CommonRegisterPayload.TYPE, net.neoforged.neoforge.network.payload.CommonRegisterPayload.STREAM_CODEC)
++            ),
+             net.minecraft.network.ConnectionProtocol.CONFIGURATION,
+             net.minecraft.network.protocol.PacketFlow.SERVERBOUND
+         )
+diff --git a/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+index c526629d6ba3c5129ca8e69ce12afa24371c4653..1d812fa467bae2717200ef4f66b8cf343fc77121 100644
+--- a/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+@@ -330,10 +330,22 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+         this.send(packet, (PacketSendListener) null);
+     }
+ 
++    // Eturlia: concrete impl so send(CustomPacketPayload) never depends on interface-default lookup quirks
++    @Override
++    public void send(net.minecraft.network.protocol.common.custom.CustomPacketPayload payload) {
++        this.send(new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(payload));
++    }
++
+     @Override
+     public void send(Packet<?> packet, @Nullable PacketSendListener callbacks) {
+-        // Eturlia / NeoForge: validate modded outbound payloads
+-        net.neoforged.neoforge.network.registration.NetworkRegistry.checkPacket(packet, this);
++        // Eturlia / NeoForge: validate modded outbound payloads — never leak UnsupportedOperationException as "Internal Exception"
++        try {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.checkPacket(packet, this);
++        } catch (UnsupportedOperationException ex) {
++            LOGGER.error("Eturlia: blocked outbound payload for {}: {}", this.playerProfile().getName(), ex.getMessage());
++            this.disconnect(Component.literal("Modded channel not negotiated: " + ex.getMessage()), PlayerKickEvent.Cause.PLUGIN);
++            return;
++        }
+         // CraftBukkit start
+         if (packet == null || this.processedDisconnect) { // Spigot
+             return;
+diff --git a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+index b3490c0c36f530e48c79698e884eb328adad6c73..c258f30f7b041d0cd6f4b6556cadb8f843b06af0 100644
+--- a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+@@ -85,10 +85,12 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+     }
+ 
+     public void startConfiguration() {
+-        // Eturlia / NeoForge: negotiate modded channels BEFORE vanilla Brand, otherwise NeoForge clients treat the server as vanilla
+-        this.send(new net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload(net.neoforged.neoforge.network.registration.NetworkRegistry.getInitialServerUnregisterChannels()));
+-        this.send(new net.neoforged.neoforge.network.payload.MinecraftRegisterPayload(net.neoforged.neoforge.network.registration.NetworkRegistry.getInitialListeningChannels(this.flow())));
+-        this.send(new net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload(java.util.Map.of()));
++        // Eturlia / NeoForge: negotiate modded channels BEFORE vanilla Brand, otherwise NeoForge clients treat the server as vanilla.
++        // Wrap explicitly in ClientboundCustomPayloadPacket (CONFIG codec embeds NeoForge builtins).
++        LOGGER.info("Eturlia: NeoForge configuration handshake starting for {}", this.gameProfile.getName());
++        this.send(new ClientboundCustomPayloadPacket(new net.neoforged.neoforge.network.payload.MinecraftUnregisterPayload(net.neoforged.neoforge.network.registration.NetworkRegistry.getInitialServerUnregisterChannels())));
++        this.send(new ClientboundCustomPayloadPacket(new net.neoforged.neoforge.network.payload.MinecraftRegisterPayload(net.neoforged.neoforge.network.registration.NetworkRegistry.getInitialListeningChannels(this.flow()))));
++        this.send(new ClientboundCustomPayloadPacket(new net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload(java.util.Map.of())));
+         this.send(new net.minecraft.network.protocol.common.ClientboundPingPacket(0));
+     }
+ 
+@@ -139,6 +141,7 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+     public void handleCustomPayload(net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket packet) {
+         if (packet.payload() instanceof net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload moddedEnvironmentPayload) {
+             this.connectionType = net.neoforged.neoforge.network.connection.ConnectionType.NEOFORGE;
++            LOGGER.info("Eturlia: NeoForge client channel query from {} ({} protocol groups)", this.gameProfile.getName(), moddedEnvironmentPayload.queries().size());
+             net.neoforged.neoforge.network.registration.NetworkRegistry.initializeNeoForgeConnection(this, moddedEnvironmentPayload.queries());
+             return;
+         }
+@@ -149,10 +152,22 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+     public void handlePong(net.minecraft.network.protocol.common.ServerboundPongPacket packet) {
+         super.handlePong(packet);
+         if (packet.getId() == 0) {
+-            if (!this.connectionType.isNeoForge() && !net.neoforged.neoforge.network.registration.NetworkRegistry.initializeOtherConnection(this)) {
+-                return;
+-            }
+-            this.runConfiguration();
++            // Brand must not go out until NeoForge negotiation finished (or confirmed other/vanilla).
++            // Run on the server thread so CraftBukkit events in runConfiguration are safe.
++            this.server.execute(() -> {
++                if (!this.isAcceptingMessages()) {
++                    return;
++                }
++                if (!this.connectionType.isNeoForge()) {
++                    LOGGER.info("Eturlia: configuration pong from {} without NeoForge query — treating as other/vanilla", this.gameProfile.getName());
++                    if (!net.neoforged.neoforge.network.registration.NetworkRegistry.initializeOtherConnection(this)) {
++                        return;
++                    }
++                } else {
++                    LOGGER.info("Eturlia: configuration pong from {} — NeoForge connection OK, sending Brand", this.gameProfile.getName());
++                }
++                this.runConfiguration();
++            });
+         }
+     }
+ 

@@ -48,6 +48,10 @@ final class EturliaModsFolderHygiene {
             skip(jar, "spark-neoforge conflicts with Eturlia's Folia-bundled spark (JPMS). /spark stays available.");
             return;
         }
+        if (isWorldEditNeoforge(lower)) {
+            skip(jar, "WorldEdit/FAWE NeoForge mod conflicts with Folia region APIs. Install WorldEdit or FAWE as a Folia plugin in plugins/ instead.");
+            return;
+        }
         if (isOriginalArclightSable(lower)) {
             skip(jar, "Arclight sable AABB patch targets Arclight; Eturlia already has Folia bridges. Use arclight_sable_patch-*-eturlia-shim.jar if a modId placeholder is required.");
         }
@@ -55,6 +59,15 @@ final class EturliaModsFolderHygiene {
 
     private static boolean isSparkNeoforge(String lower) {
         return lower.startsWith("spark-") && lower.contains("neoforge");
+    }
+
+    /** NeoForge/Forge/Fabric WorldEdit — use the Bukkit/Folia plugin in plugins/ instead. */
+    private static boolean isWorldEditNeoforge(String lower) {
+        if (!(lower.contains("worldedit") || lower.contains("fastasyncworldedit") || lower.startsWith("fawe-"))) {
+            return false;
+        }
+        return lower.contains("neoforge") || lower.contains("-forge-") || lower.contains("forge-")
+                || lower.contains("fabric");
     }
 
     private static boolean isOriginalArclightSable(String lower) {
