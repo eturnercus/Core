@@ -1,6 +1,6 @@
-# ASIC smoke results (2026-08-07) — updated for v0.2.3
+# ASIC smoke results (2026-08-07) — updated for v0.2.3 + 0086
 
-Jar: `eturlia-1.21.1-neoforge-21.1.248` with patches **0083–0085** (ComparatorBlock + ASIC BLOCK bridges).
+Jar: `eturlia-1.21.1-neoforge-21.1.248` with patches **0083–0086**.
 
 **Legend:** boot = FML OK + `Done (...)!`. Not gameplay / region-safe proof.
 
@@ -15,17 +15,18 @@ Jar: `eturlia-1.21.1-neoforge-21.1.248` with patches **0083–0085** (Comparator
 | letmedespawn (+ Almanac) | `discard()V` in checkDespawn |
 | lodestone | AttributeSupplier.Builder copy-ctor |
 | horseman | leash `discard()V` |
+| **Supplementaries** (+ Moonlight) | draw→useAmmo, Creeper explode 6-arg, FlowerPot.addPlant, ConditionalOps |
+| **quality_food** | setBlock getLightBlock, SugarCane setBlockAndUpdate, craftSlots descriptor, furnace burn 5-arg |
 | Create + Aeronautics + Sable + eturlia-shim | prior PASS (0083) |
 | Lithostitched ≥1.7.13 + Terralith + Incendium | prior PASS |
 
-## Still BLOCK / FAIL
+## Still BLOCK / document-only
 
 | Mod | Why |
 |-----|-----|
-| Supplementaries (+ amendments) | Further Folia mixin gaps (e.g. ProjectileWeaponItem) after travel/Fire/onItemUse fixes |
-| quality_food | Level.setBlock / getLightBlock inject vs Paper rewrite |
 | BetterEnd / BCLib (Fabric) | Wrong loader |
 | easy_npc_bundle | Empty JiJ — use separate jars |
+| amendments | Not re-certified with Supplementaries on this pass |
 
 ## Pack hygiene
 
@@ -36,4 +37,4 @@ Jar: `eturlia-1.21.1-neoforge-21.1.248` with patches **0083–0085** (Comparator
 
 ## Bottom line
 
-Many former ASIC BLOCKs now **boot alone** on Eturlia v0.2.3. Full concurrent ~60+ pack is still **not** certified; peel remaining Supplementaries/quality_food and junk before claiming green.
+Former ASIC BLOCKs including **Supplementaries** and **quality_food** now **boot alone** on Eturlia with 0086. Full concurrent ~60+ pack is still **not** certified green.

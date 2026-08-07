@@ -148,20 +148,26 @@ Boot = FML OK + `Done (...)!` + миры. Это **не** гарантия regio
 | horseman | `discard()V` в leash interact |
 | Create 6.0.10 + Aeronautics + Sable + eturlia-shim | PASS boot (патч 0083); region physics всё ещё RISK |
 | Lithostitched ≥1.7.13 + Terralith + Incendium | PASS |
-| Moonlight, Architectury, Cloth, Kotlin, Resourceful*, WorldEdit 7.3.8 | PASS / OK* |
+| Moonlight, Architectury*, Cloth, Kotlin, Resourceful*, WorldEdit 7.3.8 | PASS / OK* |
+| **Supplementaries** (+ Moonlight) | PASS boot (0086); amendments отдельно |
+| **quality_food** | PASS boot (0086) |
 
 ### Моды — всё ещё BLOCK / не класть
 
 | Мод | Почему |
 |-----|--------|
-| **Supplementaries** (+ amendments) | Ещё Folia mixin gaps (`ProjectileWeaponItem` и др.) после travel/Fire/onItemUse |
-| **quality_food** | `Level.setBlock` / `getLightBlock` inject — Paper переписал setBlock |
+| **amendments** (с Supplementaries) | может требовать доп. Folia bridges — проверяйте отдельно |
 | **BetterEnd / BCLib / Wunderlib / WorldWeaver** | **Fabric**, не NeoForge |
 | **easy_npc_bundle** | JiJ пустой — ставьте отдельно `easy_npc` + `easy_npc_config_ui` |
 | spark-neoforge, Arclight sable patch (оригинал), client jars, `*.bak`/`*.jar1` | hygiene BLOCK |
 | lithostitched `*beta*` / &lt;1.7.13 | hard-block ядром |
 
 Полный ASIC ~60+ jars параллельно **не** заявлен зелёным: снимайте BLOCK/CLIENT/JUNK, затем наращивайте стек. Детали: [`docs/SMOKE_ASIC_2026-08-07.md`](./docs/SMOKE_ASIC_2026-08-07.md), [`docs/PACK_COMPAT_ASIC_2026-08.md`](./docs/PACK_COMPAT_ASIC_2026-08.md).
+
+### Crash-reports
+
+- Vanilla/Paper → `crash-reports/`
+- **Eturlia (с region id)** → отдельная папка `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
 
 ### Semver
 
@@ -323,19 +329,23 @@ Boot = FML OK + `Done (...)!` + worlds. Not a Folia region-safe gameplay guarant
 
 ### Mods — boot PASS (v0.2.3 smoke)
 
-Farmers Delight, CreativeCore, Let's Do Farm & Charm, Twilight Forest, letmedespawn (+ Almanac), lodestone, horseman, Create+Aeronautics+Sable+shim, Lithostitched≥1.7.13+Terralith+Incendium, Moonlight stack / WorldEdit 7.3.8.
+Farmers Delight, CreativeCore, Let's Do Farm & Charm, Twilight Forest, letmedespawn (+ Almanac), lodestone, horseman, **Supplementaries** (+ Moonlight), **quality_food**, Create+Aeronautics+Sable+shim, Lithostitched≥1.7.13+Terralith+Incendium, Moonlight stack / WorldEdit 7.3.8.
 
 ### Mods — still BLOCK / remove
 
 | Mod | Why |
 |-----|-----|
-| **Supplementaries** (+ amendments) | Remaining Folia mixin gaps |
-| **quality_food** | `Level.setBlock` / `getLightBlock` inject vs Paper rewrite |
+| **amendments** | Not re-certified with Supplementaries on this pass |
 | **BetterEnd / BCLib** stack | Fabric, not NeoForge |
 | **easy_npc_bundle** | Empty JiJ — use `easy_npc` + `easy_npc_config_ui` |
 | spark-neoforge, Arclight sable original, client jars, junk names | hygiene |
 
 Full concurrent ASIC pack is **not** claimed green. See [`docs/SMOKE_ASIC_2026-08-07.md`](./docs/SMOKE_ASIC_2026-08-07.md).
+
+### Crash reports
+
+- Vanilla/Paper → `crash-reports/`
+- **Eturlia (with region id)** → separate folder `eturlia-crash-reports/` (`-Deturlia.crash.dir=…`)
 
 ### Semver
 
