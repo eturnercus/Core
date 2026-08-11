@@ -37,9 +37,12 @@ trap 'rm -rf "$OUT_DIR"' EXIT
 echo "=== Compiling Eturlia core + self-test ==="
 # eturlia/launch/* needs the FML/ModLauncher classpath, so only the runtime core,
 # the launcher and the tests are compiled here.
+#
+# EturliaNoiseFilter is skipped on purpose: it extends log4j's AbstractFilter, and log4j only
+# exists on the server's runtime classpath. Nothing in these checks exercises it.
 # shellcheck disable=SC2046
 "$JAVAC" --release 21 -nowarn -d "$OUT_DIR" \
-    $(find build-data/eturlia-core/src/main/java/eturlia/core -name '*.java') \
+    $(find build-data/eturlia-core/src/main/java/eturlia/core -name '*.java' ! -name 'EturliaNoiseFilter.java') \
     $(find build-data/eturlia-core/src/test/java -name '*.java') \
     $(find build-data/eturlia-launcher/src/main/java -name '*.java') \
     $(find build-data/eturlia-launcher/src/test/java -name '*.java') \

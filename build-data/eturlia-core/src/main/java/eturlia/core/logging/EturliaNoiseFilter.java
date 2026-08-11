@@ -148,6 +148,22 @@ public final class EturliaNoiseFilter extends AbstractFilter {
         return SUPPRESSED_TRACES.get();
     }
 
+    /**
+     * Messages logged at ERROR that carry no action for the operator.
+     *
+     * <p>Vanilla logs "No data fixer registered" for every modded entity type — Create alone
+     * accounts for a dozen lines per boot — and a modded server can never satisfy it, because
+     * only Mojang ships DFU schemas. Same for the spawn-placement notice. These still land in
+     * the noise log; they just stop pretending to be problems on the console.</p>
+     */
+    private static boolean isKnownHarmless(String text) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+        return text.startsWith("No data fixer registered for ")
+                || text.startsWith("The following entities have not registered to the RegisterSpawnPlacementsEvent");
+    }
+
     // ------------------------------------------------------------------ filter implementation
 
     @Override
@@ -159,6 +175,13 @@ public final class EturliaNoiseFilter extends AbstractFilter {
         String text = msg == null ? null : msg.getFormattedMessage();
 
         if (isStackFrameLine(text)) {
+            SUPPRESSED_FRAMES.incrementAndGet();
+            EturliaConsole.appendDiagnostic(event.getLoggerName(), text);
+            notePointer();
+            return Result.DENY;
+        }
+
+        if (isKnownHarmless(text)) {
             SUPPRESSED_FRAMES.incrementAndGet();
             EturliaConsole.appendDiagnostic(event.getLoggerName(), text);
             notePointer();

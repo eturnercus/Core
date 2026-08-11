@@ -208,6 +208,55 @@ Eturlia остаются в консоли, но **строго одной ст�
 | `-Deturlia.console.color=off` | без ANSI-цвета (также уважается `NO_COLOR`) |
 | `-Deturlia.log.file=<path>` | другое расположение файла диагностики |
 
+### Вход игрока: что работает
+
+**Клиент NeoForge заходит на сервер и остаётся в мире** — проверено настоящим клиентом
+(NeoForge 21.1.248, headless, автоподключение), не эмулятором протокола:
+
+```
+There are 1 out of maximum 20 players online
+```
+
+Рукопожатие NeoForge собрано из 13 точек интеграции, которые NeoForge добавляет своими
+патчами к ванильным классам, а в патче `0095` их не было. Каждая найдена по реальной
+попытке входа:
+
+| Симптом у клиента | Чего не хватало |
+|---|---|
+| «сервер не использует NeoForge» | пейлоады согласования в `startConfiguration` |
+| `Internal Exception: io.netty.handler.codec…` | кодек не знал модовых пейлоадов |
+| `SocketException: Connection reset` | `PacketEncoder.getProtocolInfo()` |
+| `UnsupportedOperationException` | `MinecraftServer.execute()` бросал исключение — на Folia нет главного потока, задачи идут в глобальный регион |
+| сервер **падал** при входе | `ConfigurationTask$Type(ResourceLocation)` |
+| обрыв на синхронизации реестров | `PacketFlow.isClientbound()`, `IServerConfigurationPacketListenerExtension`, `CustomPacketPayload.toVanillaClientbound()`, `FeatureFlagRegistry.getAllFlags()` |
+| обрыв сразу после входа | `minecraft:register` кодировался типом NeoForge вместо `DiscardedPayload` |
+| `Sending unknown packet clientbound/minecraft:bundle` | распаковщик bundle стоял в пайплайне позже сплиттера NeoForge |
+
+Сбой согласования или конфигурации теперь отключает **одно соединение**, а не валит процесс:
+Folia убивает сервер при исключении в region-тике, и кривой клиент дважды этим пользовался.
+
+### Create: текущее состояние
+
+Create **загружается и больше не роняет сервер**. Его миксин `ProjectileUtilMixin`
+оборачивает `Entity.canRiderInteract()` внутри `ProjectileUtil` — метод и вызов добавляет
+NeoForge; без них инъекция падала критически, это валило тик региона, а с ним весь процесс.
+Оба добавлены.
+
+**Но зайти с Create пока нельзя.** Через пару секунд после входа клиента выбрасывает:
+
+```
+IllegalArgumentException: No value with id -1
+  at IdMap.byIdOrThrow → LinearPalette.read → LevelChunkSection.read
+```
+
+Причина установлена бисекцией: **без модов вход чистый и стабильный, с Create — обрыв**.
+Сервер не отправляет ни одного пакета синхронизации реестров (`neoforge:registry_sync`
+в логе — ноль). Без модов идентификаторы совпадают сами собой, с Create расходятся, и
+палитра чанка декодируется в мусор.
+
+Осталось довести `ConfigurationInitialization.configureEarlyTasks` / `RegistryManager` —
+задача регистрируется, но на провод ничего не уходит.
+
 ### Известные ограничения
 
 - `mods/`-гигиена **переименовывает** конфликтные jar'ы (`spark-*neoforge*`, оригинальный
@@ -250,7 +299,7 @@ Eturlia остаются в консоли, но **строго одной ст�
 
 ## Статус патчей
 
-Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0094` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource для libjf/WorldWeaver 0094, datapack/Create/Sable и др.).  
+Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0096` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource для libjf/WorldWeaver 0094, datapack/Create/Sable и др.).  
 Черновики остальных WIP — в `patches/server-wip/`.
 
 ---
@@ -453,6 +502,50 @@ logging is untouched.
 | `-Deturlia.console.color=off` | no ANSI colour (`NO_COLOR` is honoured too) |
 | `-Deturlia.log.file=<path>` | move the diagnostics file |
 
+### Player join: what works
+
+**A NeoForge client joins the server and stays in the world** — verified with a real client
+(NeoForge 21.1.248, headless, auto-connect), not a protocol emulator:
+
+```
+There are 1 out of maximum 20 players online
+```
+
+The handshake needed 13 integration points that NeoForge adds to vanilla classes with its own
+patches and that patch `0095` was missing. Every one was found from an actual join attempt,
+not guessed: `PacketEncoder.getProtocolInfo()`, per-phase payload codecs,
+`MinecraftServer.execute()` routed to Folia's global region (Folia has no main thread and
+throws there by design), `ConfigurationTask.Type(ResourceLocation)`,
+`PacketFlow.isClientbound()`, `IServerConfigurationPacketListenerExtension`,
+`CustomPacketPayload.toVanillaClientbound()`, `FeatureFlagRegistry.getAllFlags()`,
+`SavedData.Factory(Supplier, BiFunction)`, codec selection by payload class rather than id,
+`RegistryFriendlyByteBuf` carrying the connection type, and the bundle unpacker ordered ahead
+of NeoForge's packet splitter.
+
+A failed negotiation or configuration now drops that one connection instead of the process:
+Folia halts the server when a region tick throws, and a malformed client exploited that twice.
+
+### Create: current state
+
+Create **loads and no longer crashes the server**. Its `ProjectileUtilMixin` wraps
+`Entity.canRiderInteract()` inside `ProjectileUtil`; NeoForge adds both the method and the call
+site, and without them the injection failed hard, which killed a region tick and with it the
+whole process. Both are in place now.
+
+**Joining with Create still fails.** A couple of seconds after the join the client is dropped:
+
+```
+IllegalArgumentException: No value with id -1
+  at IdMap.byIdOrThrow → LinearPalette.read → LevelChunkSection.read
+```
+
+Bisection is unambiguous: **with no mods the join is clean and stable, with Create it breaks**.
+The server sends no registry-sync packets at all (`neoforge:registry_sync` count in the log is
+zero). Without mods the ids line up by themselves; with Create they diverge and the chunk
+palette decodes to garbage. What remains is making
+`ConfigurationInitialization.configureEarlyTasks` / `RegistryManager` actually put something on
+the wire.
+
 ### Known limitations
 
 - The `mods/` hygiene pass **renames** conflicting jars (`spark-*neoforge*`, the original
@@ -495,7 +588,7 @@ Tags `vMAJOR.MINOR.PATCH` (currently **[v0.2.5](https://github.com/eturnercus/Co
 
 ## Patch status
 
-Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0094` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource for libjf/WorldWeaver 0094, datapack/Create/Sable, and more).  
+Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0096` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource for libjf/WorldWeaver 0094, datapack/Create/Sable, and more).  
 Remaining WIP drafts: `patches/server-wip/`.
 
 </details>

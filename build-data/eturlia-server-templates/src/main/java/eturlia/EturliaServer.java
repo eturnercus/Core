@@ -239,7 +239,7 @@ public final class EturliaServer {
         eturlia.core.logging.EturliaConsole.install(cs.gameDir);
         // Third-party stack-trace spam (mod datapack parse errors, Folia watchdog dumps) is what
         // actually fills the console; that noise comes through log4j, not java.util.logging.
-        eturlia.core.logging.EturliaNoiseFilter.install();
+        installNoiseFilter();
 
         cs.logBanner();
         cs.installEventBus();
@@ -247,6 +247,24 @@ public final class EturliaServer {
         cs.reportModCompatibility();
         cs.logLodConfiguration();
         return cs;
+    }
+
+    /**
+     * Installs the console noise filter reflectively.
+     *
+     * <p>{@code EturliaNoiseFilter} extends log4j's {@code AbstractFilter}, and log4j only
+     * exists on the server's runtime classpath. Calling it by name keeps this class compilable
+     * by the standalone tooling (scripts/selftest.sh) which has no log4j.</p>
+     */
+    private static void installNoiseFilter() {
+        try {
+            Class.forName("eturlia.core.logging.EturliaNoiseFilter")
+                    .getMethod("install")
+                    .invoke(null);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+            // Filtering is a convenience; never let it block startup.
+            LOGGER.warning("Console noise filter unavailable: " + e);
+        }
     }
 
     /**
