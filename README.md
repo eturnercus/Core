@@ -148,7 +148,7 @@ Eturlia закрывает Folia↔NeoForge gaps **патчами ядра**. Н
 |-------|--------|---------------|
 | Пустой / лёгкий стек (Cloth, Curios, GeckoLib, JEI, …) | SML + Folia `Done` | whitelist |
 | Farmers Delight (+ Cloth) | SML + `Done` | whitelist |
-| Create 6.0.10 | SML + `Done`; tick gaps под нагрузкой ещё ловятся | whitelist (best-effort) |
+| Create 6.0.10 | SML + `Done` + вход клиента держится; tick gaps под нагрузкой ещё ловятся | whitelist (best-effort) |
 | Moonlight Lib | SML + `Done` + worlds; SoftFluid/FluidType bridged | whitelist (best-effort) |
 | ASIC core (FD, CreativeCore, Farm&Charm, amendments, TF, Supplementaries, …) | `Done` + worlds (0084–0093) | whitelist (best-effort) |
 | libjf + respackopts (+ litho ≥1.7.13) | MainMixin OK + `Done` (0094) | whitelist |
@@ -231,31 +231,54 @@ There are 1 out of maximum 20 players online
 | обрыв на синхронизации реестров | `PacketFlow.isClientbound()`, `IServerConfigurationPacketListenerExtension`, `CustomPacketPayload.toVanillaClientbound()`, `FeatureFlagRegistry.getAllFlags()` |
 | обрыв сразу после входа | `minecraft:register` кодировался типом NeoForge вместо `DiscardedPayload` |
 | `Sending unknown packet clientbound/minecraft:bundle` | распаковщик bundle стоял в пайплайне позже сплиттера NeoForge |
+| `No value with id -1` при чтении чанка (с модами) | модовые блоки не попадали в `Block.BLOCK_STATE_REGISTRY` — см. [Create](#create-текущее-состояние) |
 
 Сбой согласования или конфигурации теперь отключает **одно соединение**, а не валит процесс:
 Folia убивает сервер при исключении в region-тике, и кривой клиент дважды этим пользовался.
 
 ### Create: текущее состояние
 
-Create **загружается и больше не роняет сервер**. Его миксин `ProjectileUtilMixin`
-оборачивает `Entity.canRiderInteract()` внутри `ProjectileUtil` — метод и вызов добавляет
-NeoForge; без них инъекция падала критически, это валило тик региона, а с ним весь процесс.
+Create **загружается, не роняет сервер, и с ним можно зайти в игру**. Проверено на
+тестовом стенде настоящим headless NeoForge-клиентом: `EturliaTester joined the game`,
+`join=1 left=0`. Чинить пришлось две независимые вещи.
+
+**1. Падение тика региона.** Миксин Create `ProjectileUtilMixin` оборачивает
+`Entity.canRiderInteract()` внутри `ProjectileUtil` — метод и вызов добавляет NeoForge.
+Без них инъекция падала критически, это валило тик региона, а с ним весь процесс.
 Оба добавлены.
 
-**Но зайти с Create пока нельзя.** Через пару секунд после входа клиента выбрасывает:
+**2. Обрыв клиента через пару секунд после входа.**
 
 ```
 IllegalArgumentException: No value with id -1
   at IdMap.byIdOrThrow → LinearPalette.read → LevelChunkSection.read
 ```
 
-Причина установлена бисекцией: **без модов вход чистый и стабильный, с Create — обрыв**.
-Сервер не отправляет ни одного пакета синхронизации реестров (`neoforge:registry_sync`
-в логе — ноль). Без модов идентификаторы совпадают сами собой, с Create расходятся, и
-палитра чанка декодируется в мусор.
+Диагностика в записи палитры назвала виновника поимённо: `Block{create:scoria}` уходил
+на провод с идентификатором `-1`.
 
-Осталось довести `ConfigurationInitialization.configureEarlyTasks` / `RegistryManager` —
-задача регистрируется, но на провод ничего не уходит.
+`Block.BLOCK_STATE_REGISTRY` заполняется один раз — статическим блоком `Blocks`, на
+бутстрапе ванильного контента. Дальше апстримный NeoForge поддерживает карту через
+`NeoForgeRegistryCallbacks.BlockCallbacks`, который вешается на `BuiltInRegistries.BLOCK`;
+этот патч в Eturlia не переносился. Поэтому **ни один модовый блок в карту не попадал**, и
+кодировщик чанка писал `-1` — на любом модовом блоке в прогруженном чанке.
+
+Вместо переноса всего registry-callback API карта дозаполняется один раз, сразу после
+`ServerModLoader` — `Block.eturlia$rebuildStateIds()`. Реестр к этому моменту заморожен,
+обход идёт в порядке идентификаторов — ровно в том же порядке клиент перестраивает свою
+карту, так что стороны сходятся. На наборе Create + Aeronautics + lithostitched + Sable
+это 38 909 состояний.
+
+Тем же способом восстановлены ещё две производные карты, которые в апстриме ведут те же
+колбэки:
+
+- `Item.BY_BLOCK` (`Item.eturlia$rebuildBlockItemMap()`) — без неё `Item.byBlock()`
+  отвечает `AIR` на любой модовый блок (ломает выбор блока, дропы, часть рецептов);
+- `PoiTypes.TYPE_BY_STATE` (`PoiTypes.eturlia$rebuildStateMap()`) — без неё модовые
+  points of interest не привязываются к блокам.
+
+Запись палитры теперь навсегда сообщает о таком `-1` одной строкой с именем блока, вместо
+того чтобы оставлять клиенту неатрибутируемое `No value with id -1`.
 
 ### Известные ограничения
 
@@ -299,7 +322,7 @@ IllegalArgumentException: No value with id -1
 
 ## Статус патчей
 
-Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0096` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource для libjf/WorldWeaver 0094, datapack/Create/Sable и др.).  
+Активные server-патчи: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0097` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource для libjf/WorldWeaver 0094, datapack/Create/Sable, сетевые идентификаторы модового контента 0097).  
 Черновики остальных WIP — в `patches/server-wip/`.
 
 ---
@@ -442,7 +465,7 @@ Audit: [`docs/PACK_COMPAT_ASIC_2026-08.md`](./docs/PACK_COMPAT_ASIC_2026-08.md) 
 |-----|--------|---------------|
 | Empty / light stack (Cloth, Curios, GeckoLib, JEI, …) | SML + Folia `Done` | whitelist |
 | Farmers Delight (+ Cloth) | SML + `Done` | whitelist |
-| Create 6.0.10 | SML + `Done`; tick gaps under load still tracked | whitelist (best-effort) |
+| Create 6.0.10 | SML + `Done` + client join holds; tick gaps under load still tracked | whitelist (best-effort) |
 | Moonlight Lib | SML + `Done` + worlds; SoftFluid/FluidType bridged | whitelist (best-effort) |
 | ASIC core (FD, CreativeCore, Farm&Charm, amendments, TF, Supplementaries, …) | `Done` + worlds (0084–0093) | whitelist (best-effort) |
 | libjf + respackopts (+ litho ≥1.7.13) | MainMixin OK + `Done` (0094) | whitelist |
@@ -522,29 +545,54 @@ throws there by design), `ConfigurationTask.Type(ResourceLocation)`,
 `RegistryFriendlyByteBuf` carrying the connection type, and the bundle unpacker ordered ahead
 of NeoForge's packet splitter.
 
+With mods installed one more thing was needed: modded blocks never reached
+`Block.BLOCK_STATE_REGISTRY`, so reading a chunk killed the client with `No value with id -1` —
+see [Create](#create-current-state).
+
 A failed negotiation or configuration now drops that one connection instead of the process:
 Folia halts the server when a region tick throws, and a malformed client exploited that twice.
 
 ### Create: current state
 
-Create **loads and no longer crashes the server**. Its `ProjectileUtilMixin` wraps
-`Entity.canRiderInteract()` inside `ProjectileUtil`; NeoForge adds both the method and the call
-site, and without them the injection failed hard, which killed a region tick and with it the
-whole process. Both are in place now.
+Create **loads, no longer crashes the server, and can be joined**. Verified on the test rig with
+a real headless NeoForge client: `EturliaTester joined the game`, `join=1 left=0`. Two unrelated
+things had to be fixed.
 
-**Joining with Create still fails.** A couple of seconds after the join the client is dropped:
+**1. A region tick died.** Create's `ProjectileUtilMixin` wraps `Entity.canRiderInteract()`
+inside `ProjectileUtil`; NeoForge adds both the method and the call site, and without them the
+injection failed hard, which killed a region tick and with it the whole process. Both are in
+place now.
+
+**2. The client was dropped a couple of seconds after joining.**
 
 ```
 IllegalArgumentException: No value with id -1
   at IdMap.byIdOrThrow → LinearPalette.read → LevelChunkSection.read
 ```
 
-Bisection is unambiguous: **with no mods the join is clean and stable, with Create it breaks**.
-The server sends no registry-sync packets at all (`neoforge:registry_sync` count in the log is
-zero). Without mods the ids line up by themselves; with Create they diverge and the chunk
-palette decodes to garbage. What remains is making
-`ConfigurationInitialization.configureEarlyTasks` / `RegistryManager` actually put something on
-the wire.
+A diagnostic on the palette write named the culprit outright: `Block{create:scoria}` went on the
+wire with id `-1`.
+
+`Block.BLOCK_STATE_REGISTRY` is filled exactly once, by `Blocks`' static initialiser, while
+vanilla content is bootstrapped. Upstream NeoForge keeps it current from there on through
+`NeoForgeRegistryCallbacks.BlockCallbacks`, installed on `BuiltInRegistries.BLOCK` — a patch
+Eturlia never carried. **No modded block ever entered the map**, so the chunk encoder wrote `-1`
+for any modded block in a loaded chunk.
+
+Rather than porting NeoForge's whole registry-callback API, the map is topped up once, right
+after `ServerModLoader` — `Block.eturlia$rebuildStateIds()`. The registry is frozen by then and
+iteration runs in id order, which is exactly the order the client rebuilds its own map in, so
+both sides agree. On Create + Aeronautics + lithostitched + Sable that is 38,909 states.
+
+The same treatment restores two more derived maps the upstream callbacks maintain:
+
+- `Item.BY_BLOCK` (`Item.eturlia$rebuildBlockItemMap()`) — without it `Item.byBlock()` answers
+  `AIR` for every modded block, breaking block picking, drops and some recipe lookups;
+- `PoiTypes.TYPE_BY_STATE` (`PoiTypes.eturlia$rebuildStateMap()`) — without it modded points of
+  interest never bind to their block states.
+
+The palette write now permanently reports such a `-1` as a single line naming the block, instead
+of leaving the client with an unattributable `No value with id -1`.
 
 ### Known limitations
 
@@ -588,7 +636,7 @@ Tags `vMAJOR.MINOR.PATCH` (currently **[v0.2.5](https://github.com/eturnercus/Co
 
 ## Patch status
 
-Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0096` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource for libjf/WorldWeaver 0094, datapack/Create/Sable, and more).  
+Active server patches: Folia `0001`–`0019`, NeoForge/Eturlia `0020`–`0097` (ASIC BLOCK bridges 0084–0086, amendments/TF/Moonlight/quality_food 0087–0093, Main.main+LevelStorageSource for libjf/WorldWeaver 0094, datapack/Create/Sable, network ids for modded content 0097).  
 Remaining WIP drafts: `patches/server-wip/`.
 
 </details>
